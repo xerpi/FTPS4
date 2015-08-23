@@ -817,7 +817,7 @@ static void *server_thread(void *arg)
 	DEBUG("Server socket fd: %d\n", server_sockfd);
 
 	/* Fill the server's address */
-	serveraddr.sin_family = AF_INET;
+	serveraddr.sin_family = sceNetHtons(AF_INET);
 	serveraddr.sin_addr.s_addr = sceNetHtonl(IN_ADDR_ANY);
 	serveraddr.sin_port = sceNetHtons(ps4_port);
 
