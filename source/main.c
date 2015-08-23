@@ -6,6 +6,7 @@
 
 #include "libc.h"
 #include "network.h"
+#include "pthread.h"
 
 #include "ftp.h"
 
@@ -21,6 +22,7 @@ int _main(void)
 	// Init and resolve libraries
 	initLibc();
 	initNetwork();
+	initPthread();
 
 	ftp_init(PS4_IP, PS4_PORT);
 
