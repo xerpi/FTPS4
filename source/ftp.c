@@ -304,7 +304,7 @@ static void send_LIST(ClientInfo *client, const char *path)
 
 	char *dentbuf = malloc(0x10000);
 
-	while (getdents(dfd, dentbuf, sizeof(dentbuf)) > 0) {
+	while (getdents(dfd, dentbuf, 0x10000) > 0) {
 
 		bp = dentbuf;
 		dent = (struct dirent *)dentbuf;
