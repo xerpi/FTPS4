@@ -284,13 +284,14 @@ static int gen_list_format(char *out, int n, int dir, unsigned int file_size,
 		filename);
 }
 
-
 static void send_LIST(ClientInfo *client, const char *path)
 {
 	char buffer[512];
 	int dfd;
-	struct dirent dent;
+	struct dirent *dent;
+	char dentbuf[0x10000];
 	struct stat st;
+	char *bp;
 
 	dfd = open(path, O_RDONLY, 0);
 	if (dfd < 0) {
@@ -302,29 +303,31 @@ static void send_LIST(ClientInfo *client, const char *path)
 
 	client_open_data_connection(client);
 
-	while (getdents(dfd, (char *)&dent, sizeof(dent)) > 0) {
-		/*gen_list_format(buffer, sizeof(buffer),
-			PSP2_S_ISDIR(dirent.d_stat.st_mode),
-			dirent.d_stat.st_size,
-			dirent.d_stat.st_ctime.month,
-			dirent.d_stat.st_ctime.day,
-			dirent.d_stat.st_ctime.hour,
-			dirent.d_stat.st_ctime.minute,
-			dirent.d_name);*/
+	while (getdents(dfd, dentbuf, sizeof(dentbuf)) > 0) {
 
-		stat(dent.d_name, &st);
+		bp = dentbuf;
+		dent = (struct dirent *)dentbuf;
 
-		gen_list_format(buffer, sizeof(buffer),
-			dent.d_type == DT_DIR,
-			st.st_size,
-			0,
-			0,
-			0,
-			0,
-			dent.d_name);
+		do {
+			stat(dent->d_name, &st);
 
-		client_send_data_msg(client, buffer);
-		memset(buffer, 0, sizeof(buffer));
+			gen_list_format(buffer, sizeof(buffer),
+				dent->d_type == DT_DIR,
+				st.st_size,
+				0,
+				0,
+				0,
+				0,
+				dent->d_name);
+
+			client_send_data_msg(client, buffer);
+			memset(buffer, 0, sizeof(buffer));
+
+			bp = bp + dent->d_reclen;
+			dent = (struct dirent *)bp;
+
+		} while (dent->d_fileno != 0);
+		memset(dentbuf, 0, sizeof(dentbuf));
 	}
 
 	close(dfd);
