@@ -145,7 +145,7 @@ static void cmd_PASV_func(ClientInfo *client)
 	DEBUG("PASV data socket fd: %d\n", client->data_sockfd);
 
 	/* Fill the data socket address */
-	client->data_sockaddr.sin_family = AF_INET;
+	client->data_sockaddr.sin_family = sceNetHtons(AF_INET);
 	client->data_sockaddr.sin_addr.s_addr = sceNetHtonl(IN_ADDR_ANY);
 	/* Let the PS4 choose a port */
 	client->data_sockaddr.sin_port = sceNetHtons(0);
@@ -220,7 +220,7 @@ static void cmd_PORT_func(ClientInfo *client)
 		client->data_sockfd);
 
 	/* Prepare socket address for the data connection */
-	client->data_sockaddr.sin_family = AF_INET;
+	client->data_sockaddr.sin_family = sceNetHtons(AF_INET);
 	client->data_sockaddr.sin_addr = data_addr;
 	client->data_sockaddr.sin_port = sceNetHtons(data_port);
 
@@ -305,7 +305,7 @@ static void send_LIST(ClientInfo *client, const char *path)
 	while (getdents(dfd, dentbuf, sizeof(dentbuf)) != 0) {
 		dent = (struct dirent *)dentbuf;
 
-		while(dent->d_fileno) {
+		while (dent->d_fileno) {
 			stat(dent->d_name, &st);
 
 			gen_list_format(buffer, sizeof(buffer),
