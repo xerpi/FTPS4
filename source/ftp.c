@@ -289,8 +289,8 @@ static void send_LIST(ClientInfo *client, const char *path)
 	char buffer[512];
 	int dfd;
 	struct dirent *dent;
+	char dentbuf[512];
 	struct stat st;
-	char *bp;
 
 	dfd = open(path, O_RDONLY, 0);
 	if (dfd < 0) {
@@ -302,14 +302,10 @@ static void send_LIST(ClientInfo *client, const char *path)
 
 	client_open_data_connection(client);
 
-	char *dentbuf = malloc(0x10000);
-
-	while (getdents(dfd, dentbuf, 0x10000) != 0) {
-
-		bp = dentbuf;
+	while (getdents(dfd, dentbuf, sizeof(dentbuf)) != 0) {
 		dent = (struct dirent *)dentbuf;
 
-		do {
+		while(dent->d_fileno) {
 			stat(dent->d_name, &st);
 
 			gen_list_format(buffer, sizeof(buffer),
@@ -324,10 +320,8 @@ static void send_LIST(ClientInfo *client, const char *path)
 			client_send_data_msg(client, buffer);
 			memset(buffer, 0, sizeof(buffer));
 
-			bp = bp + dent->d_reclen;
-			dent = (struct dirent *)bp;
-
-		} while (dent->d_fileno != 0);
+			dent = (struct dirent *)((void *)dent + dent->d_reclen);
+		}
 		memset(dentbuf, 0, sizeof(dentbuf));
 	}
 
