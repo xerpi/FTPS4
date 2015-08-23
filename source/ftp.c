@@ -289,7 +289,6 @@ static void send_LIST(ClientInfo *client, const char *path)
 	char buffer[512];
 	int dfd;
 	struct dirent *dent;
-	char dentbuf[0x10000];
 	struct stat st;
 	char *bp;
 
@@ -302,6 +301,8 @@ static void send_LIST(ClientInfo *client, const char *path)
 	client_send_ctrl_msg(client, "150 Opening ASCII mode data transfer for LIST.\n");
 
 	client_open_data_connection(client);
+
+	char *dentbuf = malloc(0x10000);
 
 	while (getdents(dfd, dentbuf, sizeof(dentbuf)) > 0) {
 
@@ -334,6 +335,7 @@ static void send_LIST(ClientInfo *client, const char *path)
 
 	DEBUG("Done sending LIST\n");
 
+	free(dentbuf);
 	client_close_data_connection(client);
 	client_send_ctrl_msg(client, "226 Transfer complete.\n");
 }
