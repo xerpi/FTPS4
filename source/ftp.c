@@ -329,7 +329,7 @@ static void send_LIST(ClientInfo *client, const char *path)
 					tm.tm_min,
 					dent->d_name);*/
 				
-				sprintf(buffer, ".rw-r--r-- 1 xerpi users 1025 Aug 23 16:54 %s\r\n", dent->d_name);
+				sprintf(buffer, "-rw-r--r-- 1 xerpi users 1025 Aug 23 16:54 %s\r\n", dent->d_name);
 			}
 			else/* if(dent->d_type == DT_DIR)*/ {
 				/*gen_list_format(buffer, sizeof(buffer),
