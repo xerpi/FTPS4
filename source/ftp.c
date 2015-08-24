@@ -314,14 +314,19 @@ static void send_LIST(ClientInfo *client, const char *path)
 		while (dent->d_fileno) {
 			stat(dent->d_name, &st);
 
+			struct tm tm;
+			gmtime_r(&st.st_ctim.tv_sec, &tm);
+
 			gen_list_format(buffer, sizeof(buffer),
 				dent->d_type == DT_DIR,
 				st.st_size,
-				1,
-				0,
-				0,
-				0,
+				tm.tm_mon,
+				tm.tm_mday,
+				tm.tm_hour,
+				tm.tm_min,
 				dent->d_name);
+
+			DEBUG(buffer);
 
 			client_send_data_msg(client, buffer);
 			memset(buffer, 0, sizeof(buffer));
