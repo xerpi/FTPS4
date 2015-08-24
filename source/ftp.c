@@ -312,25 +312,37 @@ static void send_LIST(ClientInfo *client, const char *path)
 		dent = (struct dirent *)dentbuf;
 
 		while (dent->d_fileno) {
-			stat(dent->d_name, &st);
+			if(dent->d_type == DT_REG) {
+				stat(dent->d_name, &st);
 
-			struct tm tm;
-			gmtime_r(&st.st_ctim.tv_sec, &tm);
+				struct tm tm;
+				gmtime_r(&st.st_ctim.tv_sec, &tm);
 
-			gen_list_format(buffer, sizeof(buffer),
-				dent->d_type == DT_DIR,
-				st.st_size,
-				tm.tm_mon,
-				tm.tm_mday,
-				tm.tm_hour,
-				tm.tm_min,
-				dent->d_name);
+				gen_list_format(buffer, sizeof(buffer),
+					dent->d_type == DT_DIR,
+					st.st_size,
+					tm.tm_mon,
+					tm.tm_mday,
+					tm.tm_hour,
+					tm.tm_min,
+					dent->d_name);
+			}
+			else {
+				gen_list_format(buffer, sizeof(buffer),
+					1,
+					4096,
+					0,
+					0,
+					0,
+					0,
+					dent->d_name);
+			}
 
 			DEBUG(buffer);
-
+			
 			client_send_data_msg(client, buffer);
-			memset(buffer, 0, sizeof(buffer));
-
+            memset(buffer, 0, sizeof(buffer));
+			
 			dent = (struct dirent *)((void *)dent + dent->d_reclen);
 		}
 		memset(dentbuf, 0, sizeof(dentbuf));
