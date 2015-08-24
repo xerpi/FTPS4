@@ -4,9 +4,21 @@
 
 #include "ps4.h"
 
+extern int netdbg_sock;
+
 #define UNUSED(x) (void)(x)
-#define DEBUG(...) (void)0
-#define INFO(...) (void)0
+
+
+#define debug(...) \
+	do { \
+		char buffer[512]; \
+		int size = sprintf(buffer, ##__VA_ARGS__); \
+		sceNetSend(netdbg_sock, buffer, size, 0); \
+	} while(0)
+
+
+#define DEBUG(...) debug(__VA_ARGS__)
+#define INFO(...) debug(__VA_ARGS__)
 
 #define PATH_MAX 255
 
