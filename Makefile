@@ -20,7 +20,7 @@ LIBS	:=	-lPS4-SDK
 TARGET = $(shell basename $(CURDIR))
 
 $(TARGET): $(ODIR) $(OBJS)
-	$(CC) $(ODIR)/*.o -o temp.t $(CFLAGS) $(LFLAGS) $(LIBS)
+	$(CC) $(PS4SDK)/crt0.s $(ODIR)/*.o -o temp.t $(CFLAGS) $(LFLAGS) $(LIBS)
 	$(OBJCOPY) -O binary temp.t $(TARGET)
 	rm -f temp.t
 
@@ -36,4 +36,4 @@ $(ODIR):
 .PHONY: clean
 
 clean:
-	rm -rf build $(TARGET) $(ODIR)/*.o
+	rm -f $(TARGET) $(ODIR)/*.o
