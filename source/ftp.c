@@ -312,6 +312,8 @@ static void send_LIST(ClientInfo *client, const char *path)
 		dent = (struct dirent *)dentbuf;
 
 		while (dent->d_reclen) {
+			memset(buffer, 0, sizeof(buffer));
+			
 			if(dent->d_type == DT_REG) {
 				/*stat(dent->d_name, &st);
 
@@ -348,7 +350,6 @@ static void send_LIST(ClientInfo *client, const char *path)
 			DEBUG(buffer);
 			
 			client_send_data_msg(client, buffer);
-            memset(buffer, 0, sizeof(buffer));
 			
 			dent = (struct dirent *)((void *)dent + dent->d_reclen);
 		}
