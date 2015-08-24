@@ -11,9 +11,9 @@ extern int netdbg_sock;
 
 #define debug(...) \
 	do { \
-		char buffer[512]; \
-		int size = sprintf(buffer, ##__VA_ARGS__); \
-		sceNetSend(netdbg_sock, buffer, size, 0); \
+		char debug_buffer[512]; \
+		int size = sprintf(debug_buffer, ##__VA_ARGS__); \
+		sceNetSend(netdbg_sock, debug_buffer, size, 0); \
 	} while(0)
 
 
@@ -311,7 +311,7 @@ static void send_LIST(ClientInfo *client, const char *path)
 	while (getdents(dfd, dentbuf, sizeof(dentbuf)) != 0) {
 		dent = (struct dirent *)dentbuf;
 
-		while (dent->d_fileno) {
+		while (dent->d_reclen) {
 			if(dent->d_type == DT_REG) {
 				stat(dent->d_name, &st);
 
@@ -327,16 +327,21 @@ static void send_LIST(ClientInfo *client, const char *path)
 					tm.tm_min,
 					dent->d_name);
 			}
-			else {
-				gen_list_format(buffer, sizeof(buffer),
+			//else if(dent->d_type == DT_DIR) {
+				/*gen_list_format(buffer, sizeof(buffer),
 					1,
 					4096,
 					0,
 					0,
 					0,
 					0,
-					dent->d_name);
-			}
+					dent->d_name);*/
+				
+				sprintf(buffer, "drw-r--r-- 1 xerpi users 1025 Aug 23 16:54 %s\r\n", dent->d_name);
+			//}
+			//else {
+			//	sprintf(buffer, "-rw-r--r-- 1 xerpi users 1025 Aug 23 16:54 %s\r\n", dent->d_name);
+			//}
 
 			DEBUG(buffer);
 			
