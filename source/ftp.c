@@ -308,12 +308,12 @@ static void send_LIST(ClientInfo *client, const char *path)
 
 	client_open_data_connection(client);
 
-	while (getdents(dfd, dentbuf, sizeof(dentbuf)) != 0) {
+	while (memset(dentbuf, 0, sizeof(dentbuf)), getdents(dfd, dentbuf, sizeof(dentbuf)) != 0) {
 		dent = (struct dirent *)dentbuf;
 
 		while (dent->d_reclen) {
 			if(dent->d_type == DT_REG) {
-				stat(dent->d_name, &st);
+				/*stat(dent->d_name, &st);
 
 				struct tm tm;
 				gmtime_r(&st.st_ctim.tv_sec, &tm);
@@ -325,9 +325,11 @@ static void send_LIST(ClientInfo *client, const char *path)
 					tm.tm_mday,
 					tm.tm_hour,
 					tm.tm_min,
-					dent->d_name);
+					dent->d_name);*/
+				
+				sprintf(buffer, ".rw-r--r-- 1 xerpi users 1025 Aug 23 16:54 %s\r\n", dent->d_name);
 			}
-			//else if(dent->d_type == DT_DIR) {
+			else/* if(dent->d_type == DT_DIR)*/ {
 				/*gen_list_format(buffer, sizeof(buffer),
 					1,
 					4096,
@@ -338,7 +340,7 @@ static void send_LIST(ClientInfo *client, const char *path)
 					dent->d_name);*/
 				
 				sprintf(buffer, "drw-r--r-- 1 xerpi users 1025 Aug 23 16:54 %s\r\n", dent->d_name);
-			//}
+			}
 			//else {
 			//	sprintf(buffer, "-rw-r--r-- 1 xerpi users 1025 Aug 23 16:54 %s\r\n", dent->d_name);
 			//}
@@ -350,7 +352,6 @@ static void send_LIST(ClientInfo *client, const char *path)
 			
 			dent = (struct dirent *)((void *)dent + dent->d_reclen);
 		}
-		memset(dentbuf, 0, sizeof(dentbuf));
 	}
 
 	close(dfd);
