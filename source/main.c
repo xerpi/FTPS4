@@ -2,12 +2,7 @@
  * Copyright (c) 2015 Sergi Granell (xerpi)
  */
 
-#include "kernel.h"
-
-#include "libc.h"
-#include "network.h"
-#include "pthread.h"
-
+#include "ps4.h"
 #include "ftp.h"
 
 #define PS4_IP   "192.168.0.14"
@@ -16,6 +11,7 @@
 int _main(void)
 {
 	// Init and resolve libraries
+	initKernel();
 	initLibc();
 	initNetwork();
 	initPthread();
@@ -25,7 +21,7 @@ int _main(void)
 	//INFO("PS4 listening on IP %s Port %i\n", PS4_IP, PS4_PORT);
 
 	while (1) {
-		// Delay thread
+		sceKernelUsleep(100 * 1000);
 	}
 
 	ftp_fini();

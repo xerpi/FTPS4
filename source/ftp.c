@@ -2,13 +2,7 @@
  * Copyright (c) 2015 Sergi Granell (xerpi)
  */
 
-#include "kernel.h"
-#include "network.h"
-#include "pthread.h"
-#include "libc.h"
-#include "file.h"
-
-#define sceKernelDelayThread(x) (void)0
+#include "ps4.h"
 
 #define UNUSED(x) (void)(x)
 #define DEBUG(...) (void)0
@@ -311,7 +305,7 @@ static void send_LIST(ClientInfo *client, const char *path)
 			gen_list_format(buffer, sizeof(buffer),
 				dent->d_type == DT_DIR,
 				st.st_size,
-				0,
+				1,
 				0,
 				0,
 				0,
@@ -760,7 +754,7 @@ static void *client_thread(void *arg)
 			sscanf(client->recv_buffer, "%s", cmd);
 
 			/* Wait 1 ms before sending any data */
-			sceKernelDelayThread(1*1000);
+			sceKernelUsleep(1*1000);
 
 			if ((dispatch_func = get_dispatch_func(cmd))) {
 				dispatch_func(client);
@@ -959,7 +953,7 @@ void ftp_fini()
 		client_list = NULL;
 
 		/* UGLY: Give 50 ms for the threads to exit */
-		sceKernelDelayThread(50*1000);
+		sceKernelUsleep(50*1000);
 
 		/* Delete the client list mutex */
 		scePthreadMutexDestroy(client_list_mtx);
