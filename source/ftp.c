@@ -340,7 +340,6 @@ static void send_LIST(ClientInfo *client, const char *path)
 
 	DEBUG("Done sending LIST\n");
 
-	free(dentbuf);
 	client_close_data_connection(client);
 	client_send_ctrl_msg(client, "226 Transfer complete.\n");
 }
