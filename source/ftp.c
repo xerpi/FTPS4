@@ -151,7 +151,8 @@ static void cmd_PASV_func(ClientInfo *client)
 	DEBUG("PASV data socket fd: %d\n", client->data_sockfd);
 
 	/* Fill the data socket address */
-	client->data_sockaddr.sin_family = sceNetHtons(AF_INET);
+	client->data_sockaddr.sin_len = sizeof(client->data_sockaddr);
+	client->data_sockaddr.sin_family = AF_INET;
 	client->data_sockaddr.sin_addr.s_addr = sceNetHtonl(IN_ADDR_ANY);
 	/* Let the PS4 choose a port */
 	client->data_sockaddr.sin_port = sceNetHtons(0);
@@ -226,7 +227,8 @@ static void cmd_PORT_func(ClientInfo *client)
 		client->data_sockfd);
 
 	/* Prepare socket address for the data connection */
-	client->data_sockaddr.sin_family = sceNetHtons(AF_INET);
+	client->data_sockaddr.sin_len = sizeof(client->data_sockaddr);
+	client->data_sockaddr.sin_family = AF_INET;
 	client->data_sockaddr.sin_addr = data_addr;
 	client->data_sockaddr.sin_port = sceNetHtons(data_port);
 
@@ -270,7 +272,18 @@ static void client_close_data_connection(ClientInfo *client)
 	client->data_con_type = FTP_DATA_CONNECTION_NONE;
 }
 
-static int gen_list_format(char *out, int n, int dir, unsigned int file_size,
+static char file_type_char(mode_t mode)
+{
+	return S_ISBLK(mode) ? 'b' :
+		S_ISCHR(mode) ? 'c' :
+		S_ISREG(mode) ? '-' :
+		S_ISDIR(mode) ? 'd' :
+		S_ISFIFO(mode) ? 'p' :
+		S_ISSOCK(mode) ? 's' :
+		S_ISLNK(mode) ? 'l' : ' ';
+}
+
+static int gen_list_format(char *out, int n, mode_t mode, unsigned int file_size,
 	int month_n, int day_n, int hour, int minute, const char *filename)
 {
 	static const char num_to_month[][4] = {
@@ -280,8 +293,8 @@ static int gen_list_format(char *out, int n, int dir, unsigned int file_size,
 
 	return snprintf(out, n,
 		"%c%s 1 ps4 ps4 %d %s %-2d %02d:%02d %s\r\n",
-		dir ? 'd' : '-',
-		dir ? "rwxr-xr-x" : "rw-r--r--",
+		file_type_char(mode),
+		S_ISDIR(mode) ? "rwxr-xr-x" : "rw-r--r--",
 		file_size,
 		num_to_month[month_n%12],
 		day_n,
@@ -293,13 +306,14 @@ static int gen_list_format(char *out, int n, int dir, unsigned int file_size,
 static void send_LIST(ClientInfo *client, const char *path)
 {
 	char buffer[512];
-	int dfd;
-	struct dirent *dent;
-	char dentbuf[512];
+	DIR *dir;
+	struct dirent entry;
+	struct dirent *result;
 	struct stat st;
+	struct tm tm;
 
-	dfd = open(path, O_RDONLY, 0);
-	if (dfd < 0) {
+	dir = opendir(path);
+	if (dir == NULL) {
 		client_send_ctrl_msg(client, "550 Invalid directory.\n");
 		return;
 	}
@@ -308,60 +322,38 @@ static void send_LIST(ClientInfo *client, const char *path)
 
 	client_open_data_connection(client);
 
-	while (memset(dentbuf, 0, sizeof(dentbuf)), getdents(dfd, dentbuf, sizeof(dentbuf)) != 0) {
-		dent = (struct dirent *)dentbuf;
+	while (1) {
+		if (readdir_r(dir, &entry, &result) != 0)
+			break;
 
-		while (dent->d_reclen) {
-			memset(buffer, 0, sizeof(buffer));
-			
-			if(dent->d_type == DT_REG) {
-				/*stat(dent->d_name, &st);
+		if (result == NULL)
+			break;
 
-				struct tm tm;
-				gmtime_r(&st.st_ctim.tv_sec, &tm);
+		if (stat(result->d_name, &st) == 0) {
+			gmtime_r(&st.st_ctim.tv_sec, &tm);
 
-				gen_list_format(buffer, sizeof(buffer),
-					dent->d_type == DT_DIR,
-					st.st_size,
-					tm.tm_mon,
-					tm.tm_mday,
-					tm.tm_hour,
-					tm.tm_min,
-					dent->d_name);*/
-				
-				sprintf(buffer, "-rw-r--r-- 1 xerpi users 1025 Aug 23 16:54 %s\r\n", dent->d_name);
-			}
-			else/* if(dent->d_type == DT_DIR)*/ {
-				/*gen_list_format(buffer, sizeof(buffer),
-					1,
-					4096,
-					0,
-					0,
-					0,
-					0,
-					dent->d_name);*/
-				
-				sprintf(buffer, "drw-r--r-- 1 xerpi users 1025 Aug 23 16:54 %s\r\n", dent->d_name);
-			}
-			//else {
-			//	sprintf(buffer, "-rw-r--r-- 1 xerpi users 1025 Aug 23 16:54 %s\r\n", dent->d_name);
-			//}
+			gen_list_format(buffer, sizeof(buffer),
+				st.st_mode,
+				st.st_size,
+				tm.tm_mon,
+				tm.tm_mday,
+				tm.tm_hour,
+				tm.tm_min,
+				result->d_name);
 
-			DEBUG(buffer);
-			
 			client_send_data_msg(client, buffer);
-			
-			dent = (struct dirent *)((void *)dent + dent->d_reclen);
+			memset(buffer, 0, sizeof(buffer));
 		}
 	}
 
-	close(dfd);
+	closedir(dir);
 
 	DEBUG("Done sending LIST\n");
 
 	client_close_data_connection(client);
 	client_send_ctrl_msg(client, "226 Transfer complete.\n");
 }
+
 
 static void cmd_LIST_func(ClientInfo *client)
 {
@@ -845,7 +837,8 @@ static void *server_thread(void *arg)
 	DEBUG("Server socket fd: %d\n", server_sockfd);
 
 	/* Fill the server's address */
-	serveraddr.sin_family = sceNetHtons(AF_INET);
+	serveraddr.sin_len = sizeof(serveraddr);
+	serveraddr.sin_family = AF_INET;
 	serveraddr.sin_addr.s_addr = sceNetHtonl(IN_ADDR_ANY);
 	serveraddr.sin_port = sceNetHtons(ps4_port);
 
