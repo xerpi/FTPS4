@@ -318,8 +318,9 @@ static void send_LIST(ClientInfo *client, const char *path)
 		return;
 	}
 
-	client_send_ctrl_msg(client, "150 Opening ASCII mode data transfer for LIST.\n");
+	memset(dentbuf, 0, sizeof(dentbuf));
 
+	client_send_ctrl_msg(client, "150 Opening ASCII mode data transfer for LIST.\n");
 	client_open_data_connection(client);
 
 	while (getdents(dfd, dentbuf, sizeof(dentbuf)) != 0) {
