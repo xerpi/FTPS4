@@ -372,10 +372,7 @@ static void cmd_LIST_func(ClientInfo *client)
 static void cmd_PWD_func(ClientInfo *client)
 {
 	char msg[PATH_MAX];
-	/* We don't want to send "cache0:" */
-	const char *pwd_path = strchr(client->cur_path, '/');
-
-	sprintf(msg, "257 \"%s\" is the current directory.\n", pwd_path);
+	sprintf(msg, "257 \"%s\" is the current directory.\n", client->cur_path);
 	client_send_ctrl_msg(client, msg);
 }
 
@@ -392,7 +389,7 @@ static void cmd_CWD_func(ClientInfo *client)
 		if (cmd_path[0] != '/') { /* Change dir relative to current dir */
 			sprintf(path, "%s%s", client->cur_path, cmd_path);
 		} else {
-			sprintf(path, "cache0:%s", cmd_path);
+			strcpy(path, cmd_path);
 		}
 
 		/* If there isn't "/" at the end, add it */
@@ -456,12 +453,7 @@ static void dir_up(char *path)
 
 static void cmd_CDUP_func(ClientInfo *client)
 {
-	char path[PATH_MAX];
-	/* Path without "cache0:" */
-	const char *normal_path = strchr(client->cur_path, '/');
-	strcpy(path, normal_path);
-	dir_up(path);
-	sprintf(client->cur_path, "cache0:%s", path);
+	dir_up(client->cur_path);
 	client_send_ctrl_msg(client, "200 Command okay.\n");
 }
 
@@ -509,8 +501,7 @@ static void gen_filepath(ClientInfo *client, char *dest_path)
 		/* Append the file to the current path */
 		sprintf(dest_path, "%s%s", client->cur_path, cmd_path);
 	} else {
-		/* Add "cache0:" to the file */
-		sprintf(dest_path, "cache0:%s", cmd_path);
+		strcpy(dest_path, cmd_path);
 	}
 }
 
