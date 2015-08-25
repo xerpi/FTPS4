@@ -306,14 +306,14 @@ static int gen_list_format(char *out, int n, mode_t mode, unsigned int file_size
 static void send_LIST(ClientInfo *client, const char *path)
 {
 	char buffer[512];
-	DIR *dir;
-	struct dirent entry;
-	struct dirent *result;
+	char dentbuf[512];
+	int dfd;
+	struct dirent *dent;
 	struct stat st;
 	struct tm tm;
 
-	dir = opendir(path);
-	if (dir == NULL) {
+	dfd = open(path, O_RDONLY, 0);
+	if (dfd < 0) {
 		client_send_ctrl_msg(client, "550 Invalid directory.\n");
 		return;
 	}
@@ -322,31 +322,31 @@ static void send_LIST(ClientInfo *client, const char *path)
 
 	client_open_data_connection(client);
 
-	while (1) {
-		if (readdir_r(dir, &entry, &result) != 0)
-			break;
+	while (getdents(dfd, dentbuf, sizeof(dentbuf)) != 0) {
+		dent = (struct dirent *)buffer;
 
-		if (result == NULL)
-			break;
+		while (dent->d_fileno) {
+			if (stat(dent->d_name, &st) == 0) {
+				gmtime_r(&st.st_ctim.tv_sec, &tm);
 
-		if (stat(result->d_name, &st) == 0) {
-			gmtime_r(&st.st_ctim.tv_sec, &tm);
+				gen_list_format(buffer, sizeof(buffer),
+					st.st_mode,
+					st.st_size,
+					tm.tm_mon,
+					tm.tm_mday,
+					tm.tm_hour,
+					tm.tm_min,
+					dent->d_name);
 
-			gen_list_format(buffer, sizeof(buffer),
-				st.st_mode,
-				st.st_size,
-				tm.tm_mon,
-				tm.tm_mday,
-				tm.tm_hour,
-				tm.tm_min,
-				result->d_name);
-
-			client_send_data_msg(client, buffer);
-			memset(buffer, 0, sizeof(buffer));
+				client_send_data_msg(client, buffer);
+				memset(buffer, 0, sizeof(buffer));
+			}
+			dent = (struct dirent *)((void *)dent + dent->d_reclen);
 		}
+		memset(dentbuf, 0, sizeof(dentbuf));
 	}
 
-	closedir(dir);
+	close(dfd);
 
 	DEBUG("Done sending LIST\n");
 
@@ -528,7 +528,7 @@ static void receive_file(ClientInfo *client, const char *path)
 
 	DEBUG("Opening: %s\n", path);
 
-	if ((fd = open(path, O_CREAT | O_WRONLY | O_TRUNC, 0)) >= 0) {
+	if ((fd = open(path, O_CREAT | O_WRONLY | O_TRUNC, 0777)) >= 0) {
 
 		buffer = malloc(FILE_BUF_SIZE);
 		if (buffer == NULL) {
