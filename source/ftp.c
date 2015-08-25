@@ -324,7 +324,7 @@ static void send_LIST(ClientInfo *client, const char *path)
 	client_open_data_connection(client);
 
 	while (getdents(dfd, dentbuf, sizeof(dentbuf)) != 0) {
-		dent = (struct dirent *)buffer;
+		dent = (struct dirent *)dentbuf;
 
 		while (dent->d_fileno) {
 			if (stat(dent->d_name, &st) == 0) {
