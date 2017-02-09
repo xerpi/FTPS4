@@ -3,85 +3,58 @@
  */
 
 #include "ps4.h"
-
-extern int netdbg_sock;
+#include "ftps4.h"
 
 #define UNUSED(x) (void)(x)
 
+#define NET_INIT_SIZE (64 * 1024)
+#define DEFAULT_FILE_BUF_SIZE (4 * 1024 * 1024)
 
-#define debug(...) \
-	do { \
-		char debug_buffer[512]; \
-		int size = sprintf(debug_buffer, ##__VA_ARGS__); \
-		sceNetSend(netdbg_sock, debug_buffer, size, 0); \
-	} while(0)
+#define FTP_DEFAULT_PATH   "/"
 
-
-#define DEBUG(...) debug(__VA_ARGS__)
-#define INFO(...) debug(__VA_ARGS__)
-
-#define PATH_MAX 255
-
-#define NET_INIT_SIZE 1*1024*1024
-#define FILE_BUF_SIZE 4*1024*1024
-
-#define FTP_DEFAULT_PATH "/"
-
-typedef enum {
-	FTP_DATA_CONNECTION_NONE,
-	FTP_DATA_CONNECTION_ACTIVE,
-	FTP_DATA_CONNECTION_PASSIVE,
-} DataConnectionType;
-
-typedef struct ClientInfo {
-	/* Client number */
-	int num;
-	/* Thread UID */
-	ScePthread thid;
-	/* Control connection socket FD */
-	int ctrl_sockfd;
-	/* Data connection attributes */
-	int data_sockfd;
-	DataConnectionType data_con_type;
-	struct sockaddr_in data_sockaddr;
-	/* PASV mode client socket */
-	struct sockaddr_in pasv_sockaddr;
-	int pasv_sockfd;
-	/* Remote client net info */
-	struct sockaddr_in addr;
-	/* Receive buffer attributes */
-	int n_recv;
-	char recv_buffer[512];
-	/* Current working directory */
-	char cur_path[PATH_MAX];
-	/* Rename path */
-	char rename_path[PATH_MAX];
-	/* Client list */
-	struct ClientInfo *next;
-	struct ClientInfo *prev;
-} ClientInfo;
-
-typedef void (*cmd_dispatch_func)(ClientInfo *client);
+#define MAX_CUSTOM_COMMANDS 16
 
 typedef struct {
 	const char *cmd;
 	cmd_dispatch_func func;
 } cmd_dispatch_entry;
 
-static void *net_memory = NULL;
+static struct {
+	const char *cmd;
+	cmd_dispatch_func func;
+	int valid;
+} custom_command_dispatchers[MAX_CUSTOM_COMMANDS];
+
 static int ftp_initialized = 0;
+static unsigned int file_buf_size = DEFAULT_FILE_BUF_SIZE;
 static struct in_addr ps4_addr;
 static unsigned short int ps4_port;
 static ScePthread server_thid;
 static int server_sockfd;
 static int number_clients = 0;
-static ClientInfo *client_list = NULL;
+static ftps4_client_info_t *client_list = NULL;
 static ScePthreadMutex client_list_mtx;
+
+static void (*info_log_cb)(const char *) = NULL;
+static void (*debug_log_cb)(const char *) = NULL;
+
+#define log_func(log_cb,s,...) \
+	do { \
+		if (log_cb) { \
+			char buf[512]; \
+			sprintf(buf, s, ##__VA_ARGS__); \
+			log_cb(buf); \
+		} \
+	} while(0)
+
+
+#define DEBUG(...) log_func(debug_log_cb, __VA_ARGS__)
+#define INFO(...) log_func(info_log_cb, __VA_ARGS__)
 
 #define client_send_ctrl_msg(cl, str) \
 	sceNetSend(cl->ctrl_sockfd, str, strlen(str), 0)
 
-static inline void client_send_data_msg(ClientInfo *client, const char *str)
+static inline void client_send_data_msg(ftps4_client_info_t *client, const char *str)
 {
 	if (client->data_con_type == FTP_DATA_CONNECTION_ACTIVE) {
 		sceNetSend(client->data_sockfd, str, strlen(str), 0);
@@ -90,7 +63,7 @@ static inline void client_send_data_msg(ClientInfo *client, const char *str)
 	}
 }
 
-static inline int client_send_recv_raw(ClientInfo *client, void *buf, unsigned int len)
+static inline int client_recv_data_raw(ftps4_client_info_t *client, void *buf, unsigned int len)
 {
 	if (client->data_con_type == FTP_DATA_CONNECTION_ACTIVE) {
 		return sceNetRecv(client->data_sockfd, buf, len, 0);
@@ -99,7 +72,7 @@ static inline int client_send_recv_raw(ClientInfo *client, void *buf, unsigned i
 	}
 }
 
-static inline void client_send_data_raw(ClientInfo *client, const void *buf, unsigned int len)
+static inline void client_send_data_raw(ftps4_client_info_t *client, const void *buf, unsigned int len)
 {
 	if (client->data_con_type == FTP_DATA_CONNECTION_ACTIVE) {
 		sceNetSend(client->data_sockfd, buf, len, 0);
@@ -108,27 +81,38 @@ static inline void client_send_data_raw(ClientInfo *client, const void *buf, uns
 	}
 }
 
-static void cmd_USER_func(ClientInfo *client)
+static int file_exists(const char *path)
 {
-	client_send_ctrl_msg(client, "331 Username OK, need password b0ss.\n");
+	struct stat s;
+	return (stat(path, &s) >= 0);
 }
 
-static void cmd_PASS_func(ClientInfo *client)
+static void cmd_NOOP_func(ftps4_client_info_t *client)
 {
-	client_send_ctrl_msg(client, "230 User logged in!\n");
+	client_send_ctrl_msg(client, "200 No operation ;)" FTPS4_EOL);
 }
 
-static void cmd_QUIT_func(ClientInfo *client)
+static void cmd_USER_func(ftps4_client_info_t *client)
 {
-	client_send_ctrl_msg(client, "221 Goodbye senpai :'(\n");
+	client_send_ctrl_msg(client, "331 Username OK, need password b0ss." FTPS4_EOL);
 }
 
-static void cmd_SYST_func(ClientInfo *client)
+static void cmd_PASS_func(ftps4_client_info_t *client)
 {
-	client_send_ctrl_msg(client, "215 UNIX Type: L8\n");
+	client_send_ctrl_msg(client, "230 User logged in!" FTPS4_EOL);
 }
 
-static void cmd_PASV_func(ClientInfo *client)
+static void cmd_QUIT_func(ftps4_client_info_t *client)
+{
+	client_send_ctrl_msg(client, "221 Goodbye senpai :'(" FTPS4_EOL);
+}
+
+static void cmd_SYST_func(ftps4_client_info_t *client)
+{
+	client_send_ctrl_msg(client, "215 UNIX Type: L8" FTPS4_EOL);
+}
+
+static void cmd_PASV_func(ftps4_client_info_t *client)
 {
 	int ret;
 	UNUSED(ret);
@@ -175,7 +159,7 @@ static void cmd_PASV_func(ClientInfo *client)
 	DEBUG("PASV mode port: 0x%04X\n", picked.sin_port);
 
 	/* Build the command */
-	sprintf(cmd, "227 Entering Passive Mode (%hhu,%hhu,%hhu,%hhu,%hhu,%hhu)\n",
+	sprintf(cmd, "227 Entering Passive Mode (%hhu,%hhu,%hhu,%hhu,%hhu,%hhu)" FTPS4_EOL,
 		(ps4_addr.s_addr >> 0) & 0xFF,
 		(ps4_addr.s_addr >> 8) & 0xFF,
 		(ps4_addr.s_addr >> 16) & 0xFF,
@@ -189,7 +173,7 @@ static void cmd_PASV_func(ClientInfo *client)
 	client->data_con_type = FTP_DATA_CONNECTION_PASSIVE;
 }
 
-static void cmd_PORT_func(ClientInfo *client)
+static void cmd_PORT_func(ftps4_client_info_t *client)
 {
 	unsigned char data_ip[4];
 	unsigned char porthi, portlo;
@@ -235,10 +219,10 @@ static void cmd_PORT_func(ClientInfo *client)
 	/* Set the data connection type to active! */
 	client->data_con_type = FTP_DATA_CONNECTION_ACTIVE;
 
-	client_send_ctrl_msg(client, "200 PORT command successful!\n");
+	client_send_ctrl_msg(client, "200 PORT command successful!" FTPS4_EOL);
 }
 
-static void client_open_data_connection(ClientInfo *client)
+static void client_open_data_connection(ftps4_client_info_t *client)
 {
 	int ret;
 	UNUSED(ret);
@@ -262,7 +246,7 @@ static void client_open_data_connection(ClientInfo *client)
 	}
 }
 
-static void client_close_data_connection(ClientInfo *client)
+static void client_close_data_connection(ftps4_client_info_t *client)
 {
 	sceNetSocketClose(client->data_sockfd);
 	/* In passive mode we have to close the client pasv socket too */
@@ -274,25 +258,24 @@ static void client_close_data_connection(ClientInfo *client)
 
 static char file_type_char(mode_t mode)
 {
-	return S_ISBLK(mode) ? 'b' :
-		S_ISCHR(mode) ? 'c' :
-		S_ISREG(mode) ? '-' :
-		S_ISDIR(mode) ? 'd' :
-		S_ISFIFO(mode) ? 'p' :
-		S_ISSOCK(mode) ? 's' :
-		S_ISLNK(mode) ? 'l' : ' ';
+	return S_ISBLK(mode)  ? 'b' :
+	       S_ISCHR(mode)  ? 'c' :
+	       S_ISREG(mode)  ? '-' :
+	       S_ISDIR(mode)  ? 'd' :
+	       S_ISFIFO(mode) ? 'p' :
+	       S_ISSOCK(mode) ? 's' :
+	       S_ISLNK(mode)  ? 'l' : ' ';
 }
 
-static int gen_list_format(char *out, int n, mode_t mode, unsigned int file_size,
-	int month_n, int day_n, int hour, int minute, const char *filename)
+static int gen_list_format(char *out, int n, mode_t mode, unsigned long long file_size,
+	int month_n, int day_n, int hour, int minute, const char *file_name)
 {
 	static const char num_to_month[][4] = {
 		"Jan", "Feb", "Mar", "Apr", "May", "Jun",
 		"Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
 	};
-
 	return snprintf(out, n,
-		"%c%s 1 ps4 ps4 %d %s %-2d %02d:%02d %s\r\n",
+		"%c%s 1 ps4 ps4 %u %s %2d %02d:%02d %s" FTPS4_EOL,
 		file_type_char(mode),
 		S_ISDIR(mode) ? "rwxr-xr-x" : "rw-r--r--",
 		file_size,
@@ -300,15 +283,15 @@ static int gen_list_format(char *out, int n, mode_t mode, unsigned int file_size
 		day_n,
 		hour,
 		minute,
-		filename);
+		file_name);
 }
 
-static void send_LIST(ClientInfo *client, const char *path)
+static void send_LIST(ftps4_client_info_t *client, const char *path)
 {
 	char buffer[512];
 	char dentbuf[512];
-	int dfd;
-	struct dirent *dent;
+	int dfd, dentsize, err;
+	struct dirent *dent, *dend;
 	struct stat st;
 	struct tm tm;
 
@@ -320,16 +303,22 @@ static void send_LIST(ClientInfo *client, const char *path)
 
 	memset(dentbuf, 0, sizeof(dentbuf));
 
-	client_send_ctrl_msg(client, "150 Opening ASCII mode data transfer for LIST.\n");
+	client_send_ctrl_msg(client, "150 Opening ASCII mode data transfer for LIST." FTPS4_EOL);
+
 	client_open_data_connection(client);
 
-	while (getdents(dfd, dentbuf, sizeof(dentbuf)) != 0) {
+	while ((dentsize = getdents(dfd, dentbuf, sizeof(dentbuf))) != 0) {
 		dent = (struct dirent *)dentbuf;
+		dend = (struct dirent *)(&dentbuf[dentsize]);
 
-		while (dent->d_fileno) {
-			if (stat(dent->d_name, &st) == 0) {
-				gmtime_r(&st.st_ctim.tv_sec, &tm);
-
+		while (dent != dend) {
+			/* Doesn't work properly in PS4 sandbox, EPERM :( */
+			/*err = fstatat(dfd, dent->d_name, &st, 0);*/
+			char tmp_path[PATH_MAX];
+			snprintf(tmp_path, sizeof(tmp_path), "%s/%s", path, dent->d_name);
+			err = stat(tmp_path, &st);
+			if (err == 0) {
+				gmtime_s(&st.st_ctim.tv_sec, &tm);
 				gen_list_format(buffer, sizeof(buffer),
 					st.st_mode,
 					st.st_size,
@@ -341,6 +330,8 @@ static void send_LIST(ClientInfo *client, const char *path)
 
 				client_send_data_msg(client, buffer);
 				memset(buffer, 0, sizeof(buffer));
+			} else {
+				DEBUG("%s stat returned %d\n", tmp_path, errno);
 			}
 			dent = (struct dirent *)((void *)dent + dent->d_reclen);
 		}
@@ -352,65 +343,88 @@ static void send_LIST(ClientInfo *client, const char *path)
 	DEBUG("Done sending LIST\n");
 
 	client_close_data_connection(client);
-	client_send_ctrl_msg(client, "226 Transfer complete.\n");
+	client_send_ctrl_msg(client, "226 Transfer complete." FTPS4_EOL);
 }
 
-
-static void cmd_LIST_func(ClientInfo *client)
+static void cmd_LIST_func(ftps4_client_info_t *client)
 {
 	char list_path[PATH_MAX];
+	int list_cur_path = 1;
 
 	int n = sscanf(client->recv_buffer, "%*s %[^\r\n\t]", list_path);
 
-	if (n > 0) {  /* Client specified a path */
-		send_LIST(client, list_path);
-	} else {      /* Use current path */
+	if (n > 0 && file_exists(list_path))
+		list_cur_path = 0;
+
+	if (list_cur_path)
 		send_LIST(client, client->cur_path);
-	}
+	else
+		send_LIST(client, list_path);
 }
 
-static void cmd_PWD_func(ClientInfo *client)
+static void cmd_PWD_func(ftps4_client_info_t *client)
 {
 	char msg[PATH_MAX];
-	sprintf(msg, "257 \"%s\" is the current directory.\n", client->cur_path);
+	sprintf(msg, "257 \"%s\" is the current directory." FTPS4_EOL, client->cur_path);
 	client_send_ctrl_msg(client, msg);
 }
 
-static void cmd_CWD_func(ClientInfo *client)
+static void dir_up(char *path)
+{
+	char *pch;
+	size_t len_in = strlen(path);
+	if (len_in == 1) {
+root:
+		strcpy(path, "/");
+		return;
+	}
+	pch = strrchr(path, '/');
+	if (pch == path)
+		goto root;
+	*pch = '\0';
+}
+
+static void cmd_CWD_func(ftps4_client_info_t *client)
 {
 	char cmd_path[PATH_MAX];
-	char path[PATH_MAX];
+	char tmp_path[PATH_MAX];
 	int pd;
 	int n = sscanf(client->recv_buffer, "%*s %[^\r\n\t]", cmd_path);
 
 	if (n < 1) {
-		client_send_ctrl_msg(client, "500 Syntax error, command unrecognized.\n");
+		client_send_ctrl_msg(client, "500 Syntax error, command unrecognized." FTPS4_EOL);
 	} else {
-		if (cmd_path[0] != '/') { /* Change dir relative to current dir */
-			sprintf(path, "%s%s", client->cur_path, cmd_path);
+		if (strcmp(cmd_path, "/") == 0) {
+			strcpy(client->cur_path, cmd_path);
+		} else  if (strcmp(cmd_path, "..") == 0) {
+			dir_up(client->cur_path);
 		} else {
-			strcpy(path, cmd_path);
-		}
+			if (cmd_path[0] == '/') { /* Full path */
+				strcpy(tmp_path, cmd_path);
+			} else { /* Change dir relative to current dir */
+				if (strcmp(client->cur_path, "/") == 0)
+					sprintf(tmp_path, "%s%s", client->cur_path, cmd_path);
+				else
+					sprintf(tmp_path, "%s/%s", client->cur_path, cmd_path);
+			}
 
-		/* If there isn't "/" at the end, add it */
-		if (path[strlen(path) - 1] != '/') {
-			strcat(path, "/");
+			/* If the path is not "/", check if it exists */
+			if (strcmp(tmp_path, "/") != 0) {
+				/* Check if the path exists */
+				pd = open(tmp_path, O_RDONLY, 0);
+				if (pd < 0) {
+					client_send_ctrl_msg(client, "550 Invalid directory." FTPS4_EOL);
+					return;
+				}
+				close(pd);
+			}
+			strcpy(client->cur_path, tmp_path);
 		}
-
-		/* Check if the path exists */
-		pd = open(path, O_RDONLY, 0);
-		if (pd < 0) {
-			client_send_ctrl_msg(client, "550 Invalid directory.\n");
-			return;
-		}
-		close(pd);
-
-		strcpy(client->cur_path, path);
-		client_send_ctrl_msg(client, "250 Requested file action okay, completed.\n");
+		client_send_ctrl_msg(client, "250 Requested file action okay, completed." FTPS4_EOL);
 	}
 }
 
-static void cmd_TYPE_func(ClientInfo *client)
+static void cmd_TYPE_func(ftps4_client_info_t *client)
 {
 	char data_type;
 	char format_control[8];
@@ -420,44 +434,26 @@ static void cmd_TYPE_func(ClientInfo *client)
 		switch(data_type) {
 		case 'A':
 		case 'I':
-			client_send_ctrl_msg(client, "200 Okay\n");
+			client_send_ctrl_msg(client, "200 Okay" FTPS4_EOL);
 			break;
 		case 'E':
 		case 'L':
 		default:
-			client_send_ctrl_msg(client, "504 Error: bad parameters?\n");
+			client_send_ctrl_msg(client, "504 Error: bad parameters?" FTPS4_EOL);
 			break;
 		}
 	} else {
-		client_send_ctrl_msg(client, "504 Error: bad parameters?\n");
+		client_send_ctrl_msg(client, "504 Error: bad parameters?" FTPS4_EOL);
 	}
 }
 
-static void dir_up(char *path)
-{
-	char *pch;
-	size_t len_in = strlen(path);
-	if (len_in == 1) {
-		strcpy(path, "/");
-		return;
-	}
-	if (path[len_in - 1] == '/') {
-		path[len_in - 1] = '\0';
-	}
-	pch = strrchr(path, '/');
-	if (pch) {
-		size_t s = len_in - (pch - path);
-		memset(pch + 1, '\0', s);
-	}
-}
-
-static void cmd_CDUP_func(ClientInfo *client)
+static void cmd_CDUP_func(ftps4_client_info_t *client)
 {
 	dir_up(client->cur_path);
-	client_send_ctrl_msg(client, "200 Command okay.\n");
+	client_send_ctrl_msg(client, "200 Command okay." FTPS4_EOL);
 }
 
-static void send_file(ClientInfo *client, const char *path)
+static void send_file(ftps4_client_info_t *client, const char *path)
 {
 	unsigned char *buffer;
 	int fd;
@@ -467,52 +463,57 @@ static void send_file(ClientInfo *client, const char *path)
 
 	if ((fd = open(path, O_RDONLY, 0)) >= 0) {
 
-		buffer = malloc(FILE_BUF_SIZE);
+		lseek(fd, client->restore_point, SEEK_SET);
+
+		buffer = malloc(file_buf_size);
 		if (buffer == NULL) {
-			client_send_ctrl_msg(client, "550 Could not allocate memory.\n");
+			client_send_ctrl_msg(client, "550 Could not allocate memory." FTPS4_EOL);
 			return;
 		}
 
 		client_open_data_connection(client);
-		client_send_ctrl_msg(client, "150 Opening Image mode data transfer.\n");
+		client_send_ctrl_msg(client, "150 Opening Image mode data transfer." FTPS4_EOL);
 
-		while ((bytes_read = read(fd, buffer, FILE_BUF_SIZE)) > 0) {
+		while ((bytes_read = read(fd, buffer, file_buf_size)) > 0) {
 			client_send_data_raw(client, buffer, bytes_read);
 		}
 
 		close(fd);
 		free(buffer);
-		client_send_ctrl_msg(client, "226 Transfer completed.\n");
+		client->restore_point = 0;
+		client_send_ctrl_msg(client, "226 Transfer completed." FTPS4_EOL);
 		client_close_data_connection(client);
 
 	} else {
-		client_send_ctrl_msg(client, "550 File not found.\n");
+		client_send_ctrl_msg(client, "550 File not found." FTPS4_EOL);
 	}
 }
 
 /* This function generates a PS4 valid path with the input path
  * from RETR, STOR, DELE, RMD, MKD, RNFR and RNTO commands */
-static void gen_filepath(ClientInfo *client, char *dest_path)
+static void gen_filepath(ftps4_client_info_t *client, char *dest_path)
 {
 	char cmd_path[PATH_MAX];
 	sscanf(client->recv_buffer, "%*[^ ] %[^\r\n\t]", cmd_path);
 
-	if (cmd_path[0] != '/') { /* The file is relative to current dir */
-		/* Append the file to the current path */
-		sprintf(dest_path, "%s%s", client->cur_path, cmd_path);
-	} else {
+	if (cmd_path[0] == '/') {
+		/* Full path */
 		strcpy(dest_path, cmd_path);
+	} else {
+		/* The file is relative to current dir, so
+		 * append the file to the current path */
+		sprintf(dest_path, "%s/%s", client->cur_path, cmd_path);
 	}
 }
 
-static void cmd_RETR_func(ClientInfo *client)
+static void cmd_RETR_func(ftps4_client_info_t *client)
 {
 	char dest_path[PATH_MAX];
 	gen_filepath(client, dest_path);
 	send_file(client, dest_path);
 }
 
-static void receive_file(ClientInfo *client, const char *path)
+static void receive_file(ftps4_client_info_t *client, const char *path)
 {
 	unsigned char *buffer;
 	int fd;
@@ -520,102 +521,112 @@ static void receive_file(ClientInfo *client, const char *path)
 
 	DEBUG("Opening: %s\n", path);
 
-	if ((fd = open(path, O_CREAT | O_WRONLY | O_TRUNC, 0777)) >= 0) {
+	int mode = O_CREAT | O_RDWR;
+	/* if we resume broken - append missing part
+	 * else - overwrite file */
+	if (client->restore_point) {
+		mode = mode | O_APPEND;
+	}
+	else {
+		mode = mode | O_TRUNC;
+	}
 
-		buffer = malloc(FILE_BUF_SIZE);
+	if ((fd = open(path, mode, 0777)) >= 0) {
+
+		buffer = malloc(file_buf_size);
 		if (buffer == NULL) {
-			client_send_ctrl_msg(client, "550 Could not allocate memory.\n");
+			client_send_ctrl_msg(client, "550 Could not allocate memory." FTPS4_EOL);
 			return;
 		}
 
 		client_open_data_connection(client);
-		client_send_ctrl_msg(client, "150 Opening Image mode data transfer.\n");
+		client_send_ctrl_msg(client, "150 Opening Image mode data transfer." FTPS4_EOL);
 
-		while ((bytes_recv = client_send_recv_raw(client, buffer, FILE_BUF_SIZE)) > 0) {
+		while ((bytes_recv = client_recv_data_raw(client, buffer, file_buf_size)) > 0) {
 			write(fd, buffer, bytes_recv);
 		}
 
 		close(fd);
 		free(buffer);
-		client_send_ctrl_msg(client, "226 Transfer completed.\n");
+		client->restore_point = 0;
+		if (bytes_recv == 0) {
+			client_send_ctrl_msg(client, "226 Transfer completed." FTPS4_EOL);
+		} else {
+			unlink(path);
+			client_send_ctrl_msg(client, "426 Connection closed; transfer aborted." FTPS4_EOL);
+		}
 		client_close_data_connection(client);
 
 	} else {
-		client_send_ctrl_msg(client, "550 File not found.\n");
+		client_send_ctrl_msg(client, "550 File not found." FTPS4_EOL);
 	}
 }
 
-static void cmd_STOR_func(ClientInfo *client)
+static void cmd_STOR_func(ftps4_client_info_t *client)
 {
 	char dest_path[PATH_MAX];
 	gen_filepath(client, dest_path);
 	receive_file(client, dest_path);
 }
 
-static void delete_file(ClientInfo *client, const char *path)
+static void delete_file(ftps4_client_info_t *client, const char *path)
 {
 	DEBUG("Deleting: %s\n", path);
 
 	if (unlink(path) >= 0) {
-		client_send_ctrl_msg(client, "226 File deleted.\n");
+		client_send_ctrl_msg(client, "226 File deleted." FTPS4_EOL);
 	} else {
-		client_send_ctrl_msg(client, "550 Could not delete the file.\n");
+		client_send_ctrl_msg(client, "550 Could not delete the file." FTPS4_EOL);
 	}
 }
 
-static void cmd_DELE_func(ClientInfo *client)
+static void cmd_DELE_func(ftps4_client_info_t *client)
 {
 	char dest_path[PATH_MAX];
 	gen_filepath(client, dest_path);
 	delete_file(client, dest_path);
 }
 
-static void delete_dir(ClientInfo *client, const char *path)
+static void delete_dir(ftps4_client_info_t *client, const char *path)
 {
 	int ret;
 	DEBUG("Deleting: %s\n", path);
 	ret = rmdir(path);
 	if (ret >= 0) {
 		client_send_ctrl_msg(client, "226 Directory deleted.\n");
-	} else if (ret == 0x8001005A) { /* DIRECTORY_IS_NOT_EMPTY */
+	} else if (errno == 66) { /* ENOTEMPTY */
 		client_send_ctrl_msg(client, "550 Directory is not empty.\n");
 	} else {
 		client_send_ctrl_msg(client, "550 Could not delete the directory.\n");
 	}
 }
 
-static void cmd_RMD_func(ClientInfo *client)
+static void cmd_RMD_func(ftps4_client_info_t *client)
 {
 	char dest_path[PATH_MAX];
 	gen_filepath(client, dest_path);
 	delete_dir(client, dest_path);
 }
 
-static void create_dir(ClientInfo *client, const char *path)
+static void create_dir(ftps4_client_info_t *client, const char *path)
 {
 	DEBUG("Creating: %s\n", path);
 
 	if (mkdir(path, 0777) >= 0) {
-		client_send_ctrl_msg(client, "226 Directory created.\n");
+		client_send_ctrl_msg(client, "226 Directory created." FTPS4_EOL);
 	} else {
-		client_send_ctrl_msg(client, "550 Could not create the directory.\n");
+		client_send_ctrl_msg(client, "550 Could not create the directory." FTPS4_EOL);
 	}
 }
 
-static void cmd_MKD_func(ClientInfo *client)
+static void cmd_MKD_func(ftps4_client_info_t *client)
 {
 	char dest_path[PATH_MAX];
 	gen_filepath(client, dest_path);
 	create_dir(client, dest_path);
 }
 
-static int file_exists(const char *path)
-{
-	struct stat s;
-	return (stat(path, &s) >= 0);
-}
-
-static void cmd_RNFR_func(ClientInfo *client)
+static void cmd_RNFR_func(ftps4_client_info_t *client)
 {
 	char from_path[PATH_MAX];
 	/* Get the origin filename */
@@ -623,15 +634,15 @@ static void cmd_RNFR_func(ClientInfo *client)
 
 	/* Check if the file exists */
 	if (!file_exists(from_path)) {
-		client_send_ctrl_msg(client, "550 The file doesn't exist.\n");
+		client_send_ctrl_msg(client, "550 The file doesn't exist." FTPS4_EOL);
 		return;
 	}
 	/* The file to be renamed is the received path */
 	strcpy(client->rename_path, from_path);
-	client_send_ctrl_msg(client, "250 I need the destination name b0ss.\n");
+	client_send_ctrl_msg(client, "250 I need the destination name b0ss." FTPS4_EOL);
 }
 
-static void cmd_RNTO_func(ClientInfo *client)
+static void cmd_RNTO_func(ftps4_client_info_t *client)
 {
 	char path_to[PATH_MAX];
 	/* Get the destination filename */
@@ -640,13 +651,13 @@ static void cmd_RNTO_func(ClientInfo *client)
 	DEBUG("Renaming: %s to %s\n", client->rename_path, path_to);
 
 	if (rename(client->rename_path, path_to) < 0) {
-		client_send_ctrl_msg(client, "550 Error renaming the file.\n");
+		client_send_ctrl_msg(client, "550 Error renaming the file." FTPS4_EOL);
 	}
 
-	client_send_ctrl_msg(client, "226 Rename completed.\n");
+	client_send_ctrl_msg(client, "226 Rename completed." FTPS4_EOL);
 }
 
-static void cmd_SIZE_func(ClientInfo *client)
+static void cmd_SIZE_func(ftps4_client_info_t *client)
 {
 	struct stat s;
 	char path[PATH_MAX];
@@ -656,16 +667,45 @@ static void cmd_SIZE_func(ClientInfo *client)
 
 	/* Check if the file exists */
 	if (stat(path, &s) < 0) {
-		client_send_ctrl_msg(client, "550 The file doesn't exist.\n");
+		client_send_ctrl_msg(client, "550 The file doesn't exist." FTPS4_EOL);
 		return;
 	}
 	/* Send the size of the file */
-	sprintf(cmd, "213: %lld\n", s.st_size);
+	sprintf(cmd, "213: %lld" FTPS4_EOL, s.st_size);
 	client_send_ctrl_msg(client, cmd);
+}
+
+static void cmd_REST_func(ftps4_client_info_t *client)
+{
+	char cmd[64];
+	sscanf(client->recv_buffer, "%*[^ ] %d", &client->restore_point);
+	sprintf(cmd, "350 Resuming at %d" FTPS4_EOL, client->restore_point);
+	client_send_ctrl_msg(client, cmd);
+}
+
+static void cmd_FEAT_func(ftps4_client_info_t *client)
+{
+	/*So client would know that we support resume */
+	client_send_ctrl_msg(client, "211-extensions" FTPS4_EOL);
+	client_send_ctrl_msg(client, "REST STREAM" FTPS4_EOL);
+	client_send_ctrl_msg(client, "211 end" FTPS4_EOL);
+}
+
+static void cmd_APPE_func(ftps4_client_info_t *client)
+{
+	/* set restore point to not 0
+	restore point numeric value only matters if we RETR file from ps4.
+	If we STOR or APPE, it is only used to indicate that we want to resume
+	a broken transfer */
+	client->restore_point = -1;
+	char dest_path[PATH_MAX];
+	gen_filepath(client, dest_path);
+	receive_file(client, dest_path);
 }
 
 #define add_entry(name) {#name, cmd_##name##_func}
 static const cmd_dispatch_entry cmd_dispatch_table[] = {
+	add_entry(NOOP),
 	add_entry(USER),
 	add_entry(PASS),
 	add_entry(QUIT),
@@ -685,6 +725,9 @@ static const cmd_dispatch_entry cmd_dispatch_table[] = {
 	add_entry(RNFR),
 	add_entry(RNTO),
 	add_entry(SIZE),
+	add_entry(REST),
+	add_entry(FEAT),
+	add_entry(APPE),
 	{NULL, NULL}
 };
 
@@ -696,10 +739,18 @@ static cmd_dispatch_func get_dispatch_func(const char *cmd)
 			return cmd_dispatch_table[i].func;
 		}
 	}
+	// Check for custom commands
+	for(i = 0; i < MAX_CUSTOM_COMMANDS; i++) {
+		if (custom_command_dispatchers[i].valid) {
+			if (strcmp(cmd, custom_command_dispatchers[i].cmd) == 0) {
+				return custom_command_dispatchers[i].func;
+			}
+		}
+	}
 	return NULL;
 }
 
-static void client_list_add(ClientInfo *client)
+static void client_list_add(ftps4_client_info_t *client)
 {
 	/* Add the client at the front of the client list */
 	scePthreadMutexLock(&client_list_mtx);
@@ -714,11 +765,13 @@ static void client_list_add(ClientInfo *client)
 		client->prev = NULL;
 		client_list = client;
 	}
+	client->restore_point = 0;
+	number_clients++;
 
 	scePthreadMutexUnlock(&client_list_mtx);
 }
 
-static void client_list_delete(ClientInfo *client)
+static void client_list_delete(ftps4_client_info_t *client)
 {
 	/* Remove the client from the client list */
 	scePthreadMutexLock(&client_list_mtx);
@@ -729,20 +782,48 @@ static void client_list_delete(ClientInfo *client)
 	if (client->next) {
 		client->next->prev = client->prev;
 	}
+	if (client == client_list) {
+		client_list = client->next;
+	}
+
+	number_clients--;
 
 	scePthreadMutexUnlock(&client_list_mtx);
 }
 
-static void client_list_close_sockets()
+static void client_list_thread_end()
 {
+	ftps4_client_info_t *it, *next;
+	ScePthread client_thid;
+	const int data_abort_flags = SCE_NET_SOCKET_ABORT_FLAG_RCV_PRESERVATION |
+	                             SCE_NET_SOCKET_ABORT_FLAG_SND_PRESERVATION;
+
 	/* Iterate over the client list and close their sockets */
 	scePthreadMutexLock(&client_list_mtx);
 
-	ClientInfo *it = client_list;
+	it = client_list;
 
 	while (it) {
-		sceNetSocketClose(it->ctrl_sockfd);
-		it = it->next;
+		next = it->next;
+		client_thid = it->thid;
+
+		/* Abort the client's control socket, only abort
+		 * receiving data so we can still send control messages */
+		sceNetSocketAbort(it->ctrl_sockfd,
+			SCE_NET_SOCKET_ABORT_FLAG_RCV_PRESERVATION);
+
+		/* If there's an open data connection, abort it */
+		if (it->data_con_type != FTP_DATA_CONNECTION_NONE) {
+			sceNetSocketAbort(it->data_sockfd, data_abort_flags);
+			if (it->data_con_type == FTP_DATA_CONNECTION_PASSIVE) {
+				sceNetSocketAbort(it->pasv_sockfd, data_abort_flags);
+			}
+		}
+
+		/* Wait until the client threads ends */
+		scePthreadJoin(client_thid, NULL);
+
+		it = next;
 	}
 
 	scePthreadMutexUnlock(&client_list_mtx);
@@ -752,14 +833,13 @@ static void *client_thread(void *arg)
 {
 	char cmd[16];
 	cmd_dispatch_func dispatch_func;
-	ClientInfo *client = (ClientInfo *)arg;
+	ftps4_client_info_t *client = (ftps4_client_info_t *)arg;
 
 	DEBUG("Client thread %i started!\n", client->num);
 
-	client_send_ctrl_msg(client, "220 FTPS4 Server ready.\n");
+	client_send_ctrl_msg(client, "220 FTPS4 Server ready." FTPS4_EOL);
 
 	while (1) {
-
 		memset(client->recv_buffer, 0, sizeof(client->recv_buffer));
 
 		client->n_recv = sceNetRecv(client->ctrl_sockfd, client->recv_buffer, sizeof(client->recv_buffer), 0);
@@ -778,22 +858,29 @@ static void *client_thread(void *arg)
 			if ((dispatch_func = get_dispatch_func(cmd))) {
 				dispatch_func(client);
 			} else {
-				client_send_ctrl_msg(client, "502 Sorry, command not implemented. :(\n");
+				client_send_ctrl_msg(client, "502 Sorry, command not implemented. :(" FTPS4_EOL);
 			}
 
 		} else if (client->n_recv == 0) {
 			/* Value 0 means connection closed by the remote peer */
 			INFO("Connection closed by the client %i.\n", client->num);
-			/* Close the client's socket */
-			sceNetSocketClose(client->ctrl_sockfd);
 			/* Delete itself from the client list */
 			client_list_delete(client);
 			break;
+		} else if (client->n_recv == SCE_NET_ERROR_EINTR) {
+			/* Socket aborted (ftps4_fini() called) */
+			INFO("Client %i socket aborted.\n", client->num);
+			break;
 		} else {
-			/* A negative value means error */
+			/* Other errors */
+			INFO("Client %i socket error: 0x%08X\n", client->num, client->n_recv);
+			client_list_delete(client);
 			break;
 		}
 	}
+
+	/* Close the client's socket */
+	sceNetSocketClose(client->ctrl_sockfd);
 
 	/* If there's an open data connection, close it */
 	if (client->data_con_type != FTP_DATA_CONNECTION_NONE) {
@@ -813,7 +900,7 @@ static void *client_thread(void *arg)
 
 static void *server_thread(void *arg)
 {
-	int ret;
+	int ret, enable;
 	UNUSED(ret);
 
 	struct sockaddr_in serveraddr;
@@ -827,6 +914,9 @@ static void *server_thread(void *arg)
 		0);
 
 	DEBUG("Server socket fd: %d\n", server_sockfd);
+
+	enable = 1;
+	sceNetSetsockopt(server_sockfd, SCE_NET_SOL_SOCKET, SCE_NET_SO_REUSEADDR, &enable, sizeof(enable));
 
 	/* Fill the server's address */
 	serveraddr.sin_len = sizeof(serveraddr);
@@ -843,7 +933,6 @@ static void *server_thread(void *arg)
 	DEBUG("sceNetListen(): 0x%08X\n", ret);
 
 	while (1) {
-
 		/* Accept clients */
 		struct sockaddr_in clientaddr;
 		int client_sockfd;
@@ -853,7 +942,6 @@ static void *server_thread(void *arg)
 
 		client_sockfd = sceNetAccept(server_sockfd, (struct sockaddr *)&clientaddr, &addrlen);
 		if (client_sockfd >= 0) {
-
 			DEBUG("New connection, client fd: 0x%08X\n", client_sockfd);
 
 			/* Get the client's IP address */
@@ -866,8 +954,8 @@ static void *server_thread(void *arg)
 			INFO("Client %i connected, IP: %s port: %i\n",
 				number_clients, remote_ip, clientaddr.sin_port);
 
-			/* Allocate the ClientInfo struct for the new client */
-			ClientInfo *client = malloc(sizeof(*client));
+			/* Allocate the ftps4_client_info_t struct for the new client */
+			ftps4_client_info_t *client = malloc(sizeof(*client));
 			client->num = number_clients;
 			client->ctrl_sockfd = client_sockfd;
 			client->data_con_type = FTP_DATA_CONNECTION_NONE;
@@ -888,6 +976,9 @@ static void *server_thread(void *arg)
 			DEBUG("Client %i thread UID: 0x%08X\n", number_clients, client->thid);
 
 			number_clients++;
+		} else if (client_sockfd == SCE_NET_ERROR_EINTR) {
+			INFO("Server socket aborted.\n");
+			break;
 		} else {
 			/* if sceNetAccept returns < 0, it means that the listening
 			 * socket has been closed, this means that we want to
@@ -899,47 +990,18 @@ static void *server_thread(void *arg)
 
 	DEBUG("Server thread exiting!\n");
 
-	scePthreadExit(NULL);
+	/* Causing a crash? */
+	/*scePthreadExit(NULL);*/
 	return NULL;
 }
 
-void ftp_init(const char *ip, unsigned short int port)
+int ftps4_init(const char *ip, unsigned short int port)
 {
-	int ret;
-	UNUSED(ret);
-
-	//SceNetInitParam initparam;
-	//SceNetCtlInfo info;
+	int i;
 
 	if (ftp_initialized) {
-		return;
+		return -1;
 	}
-
-	/* Init Net */
-	/*if (sceNetShowNetstat() == PSP2_NET_ERROR_ENOTINIT) {
-		net_memory = malloc(NET_INIT_SIZE);
-
-		initparam.memory = net_memory;
-		initparam.size = NET_INIT_SIZE;
-		initparam.flags = 0;
-
-		ret = sceNetInit(&initparam);
-		DEBUG("sceNetInit(): 0x%08X\n", ret);
-	} else {
-		DEBUG("Net is already initialized.\n");
-	}*/
-
-	/* Init NetCtl */
-	//ret = sceNetCtlInit();
-	//DEBUG("sceNetCtlInit(): 0x%08X\n", ret);
-
-	/* Get IP address */
-	//ret = sceNetCtlInetGetInfo(PSP2_NETCTL_INFO_GET_IP_ADDRESS, &info);
-	//DEBUG("sceNetCtlInetGetInfo(): 0x%08X\n", ret);
-
-	/* Return data */
-	//strcpy(vita_ip, info.ip_address);
-	//*vita_port = FTP_PORT;
 
 	/* Save the listening port of the PS4 to a global variable */
 	ps4_port = port;
@@ -951,42 +1013,99 @@ void ftp_init(const char *ip, unsigned short int port)
 	scePthreadMutexInit(&client_list_mtx, NULL, "FTPS4_client_list_mutex");
 	DEBUG("Client list mutex UID: 0x%08X\n", client_list_mtx);
 
+	for (i = 0; i < MAX_CUSTOM_COMMANDS; i++) {
+		custom_command_dispatchers[i].valid = 0;
+	}
+
 	/* Create server thread */
 	scePthreadCreate(&server_thid, NULL, server_thread, NULL, "FTPS4_server_thread");
 	DEBUG("Server thread UID: 0x%08X\n", server_thid);
 
 	ftp_initialized = 1;
+
+	return 0;
 }
 
-void ftp_fini()
+void ftps4_fini()
 {
 	if (ftp_initialized) {
+		/* Necessary to get sceNetAccept to notice the close on PS4? */
+		sceNetSocketAbort(server_sockfd, 0);
 		/* In order to "stop" the blocking sceNetAccept,
 		 * we have to close the server socket; this way
 		 * the accept call will return an error */
 		sceNetSocketClose(server_sockfd);
 
+		/* Wait until the server threads ends */
+		scePthreadJoin(server_thid, NULL);
+
 		/* To close the clients we have to do the same:
 		 * we have to iterate over all the clients
-		 * and close their sockets */
-		client_list_close_sockets();
-		client_list = NULL;
-
-		/* UGLY: Give 50 ms for the threads to exit */
-		sceKernelUsleep(50*1000);
+		 * and shutdown their sockets */
+		client_list_thread_end();
 
 		/* Delete the client list mutex */
 		scePthreadMutexDestroy(client_list_mtx);
 
-		//sceNetCtlTerm();
-		//sceNetTerm();
-
-		if (net_memory) {
-			free(net_memory);
-			net_memory = NULL;
-		}
+		client_list = NULL;
+		number_clients = 0;
 
 		ftp_initialized = 0;
 	}
 }
 
+int ftps4_is_initialized()
+{
+	return ftp_initialized;
+}
+
+void ftps4_set_info_log_cb(ftps4_log_cb_t cb)
+{
+	info_log_cb = cb;
+}
+
+void ftps4_set_debug_log_cb(ftps4_log_cb_t cb)
+{
+	debug_log_cb = cb;
+}
+
+void ftps4_set_file_buf_size(unsigned int size)
+{
+	file_buf_size = size;
+}
+
+int ftps4_ext_add_custom_command(const char *cmd, cmd_dispatch_func func)
+{
+	int i;
+	for (i = 0; i < MAX_CUSTOM_COMMANDS; i++) {
+		if (!custom_command_dispatchers[i].valid) {
+			custom_command_dispatchers[i].cmd = cmd;
+			custom_command_dispatchers[i].func = func;
+			custom_command_dispatchers[i].valid = 1;
+			return 1;
+		}
+	}
+	return 0;
+}
+
+int ftps4_ext_del_custom_command(const char *cmd)
+{
+	int i;
+	for (i = 0; i < MAX_CUSTOM_COMMANDS; i++) {
+		if (strcmp(cmd, custom_command_dispatchers[i].cmd) == 0) {
+			custom_command_dispatchers[i].valid = 0;
+			return 1;
+		}
+	}
+	return 0;
+}
+
+void ftps4_ext_client_send_ctrl_msg(ftps4_client_info_t *client, const char *msg)
+{
+	client_send_ctrl_msg(client, msg);
+}
+
+void ftps4_ext_client_send_data_msg(ftps4_client_info_t *client, const char *str)
+{
+	client_send_data_msg(client, str);
+}
