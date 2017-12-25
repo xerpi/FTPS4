@@ -180,10 +180,20 @@ static void cmd_PORT_func(ftps4_client_info_t *client)
 	unsigned short data_port;
 	char ip_str[16];
 	struct in_addr data_addr;
+	int n;
 
-	sscanf(client->recv_buffer, "%*s %hhu,%hhu,%hhu,%hhu,%hhu,%hhu",
+	if (!client->recv_cmd_args) {
+		client_send_ctrl_msg(client, "500 Syntax error, command unrecognized." FTPS4_EOL);
+		return;
+	}
+
+	n = sscanf(client->recv_cmd_args, "%hhu,%hhu,%hhu,%hhu,%hhu,%hhu",
 		&data_ip[0], &data_ip[1], &data_ip[2], &data_ip[3],
 		&porthi, &portlo);
+	if (n != 6) {
+		client_send_ctrl_msg(client, "500 Syntax error, command unrecognized." FTPS4_EOL);
+		return;
+	}
 
 	data_port = portlo + porthi*256;
 
@@ -267,22 +277,31 @@ static char file_type_char(mode_t mode)
 	       S_ISLNK(mode)  ? 'l' : ' ';
 }
 
-static int gen_list_format(char *out, int n, mode_t mode, unsigned long long file_size,
-	int month_n, int day_n, int hour, int minute, const char *file_name)
+static int gen_list_format(char *out, int n, mode_t file_mode, unsigned long long file_size,
+	const struct tm file_tm, const char *file_name, const struct tm cur_tm)
 {
 	static const char num_to_month[][4] = {
 		"Jan", "Feb", "Mar", "Apr", "May", "Jun",
 		"Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
 	};
+
+	char yt[6];
+
+	if (cur_tm.tm_year == file_tm.tm_year) {
+		snprintf(yt, sizeof(yt), "%02d:%02d", file_tm.tm_hour, file_tm.tm_min);
+	}
+	else {
+		snprintf(yt, sizeof(yt), "%04d", 1900 + file_tm.tm_year);
+	}
+
 	return snprintf(out, n,
-		"%c%s 1 ps4 ps4 %llu %s %2d %02d:%02d %s" FTPS4_EOL,
-		file_type_char(mode),
-		S_ISDIR(mode) ? "rwxr-xr-x" : "rw-r--r--",
+		"%c%s 1 ps4 ps4 %llu %s %2d %s %s" FTPS4_EOL,
+		file_type_char(file_mode),
+		S_ISDIR(file_mode) ? "rwxr-xr-x" : "rw-r--r--",
 		file_size,
-		num_to_month[month_n%12],
-		day_n,
-		hour,
-		minute,
+		num_to_month[file_tm.tm_mon%12],
+		file_tm.tm_mday,
+		yt,
 		file_name);
 }
 
@@ -293,11 +312,12 @@ static void send_LIST(ftps4_client_info_t *client, const char *path)
 	int dfd, dentsize, err;
 	struct dirent *dent, *dend;
 	struct stat st;
-	struct tm tm;
+	time_t cur_time;
+	struct tm tm, cur_tm;
 
 	dfd = open(path, O_RDONLY, 0);
 	if (dfd < 0) {
-		client_send_ctrl_msg(client, "550 Invalid directory.\n");
+		client_send_ctrl_msg(client, "550 Invalid directory." FTPS4_EOL);
 		return;
 	}
 
@@ -307,31 +327,34 @@ static void send_LIST(ftps4_client_info_t *client, const char *path)
 
 	client_open_data_connection(client);
 
+	time(&cur_time);
+	gmtime_s(&cur_time, &cur_tm);
+
 	while ((dentsize = getdents(dfd, dentbuf, sizeof(dentbuf))) != 0) {
 		dent = (struct dirent *)dentbuf;
 		dend = (struct dirent *)(&dentbuf[dentsize]);
 
 		while (dent != dend) {
-			/* Doesn't work properly in PS4 sandbox, EPERM :( */
-			/*err = fstatat(dfd, dent->d_name, &st, 0);*/
-			char tmp_path[PATH_MAX];
-			snprintf(tmp_path, sizeof(tmp_path), "%s/%s", path, dent->d_name);
-			err = stat(tmp_path, &st);
-			if (err == 0) {
-				gmtime_s(&st.st_ctim.tv_sec, &tm);
-				gen_list_format(buffer, sizeof(buffer),
-					st.st_mode,
-					st.st_size,
-					tm.tm_mon,
-					tm.tm_mday,
-					tm.tm_hour,
-					tm.tm_min,
-					dent->d_name);
+			if (dent->d_name[0] != '\0') {
+				char full_path[PATH_MAX];
+				snprintf(full_path, sizeof(full_path), "%s/%s", path, dent->d_name);
 
-				client_send_data_msg(client, buffer);
-				memset(buffer, 0, sizeof(buffer));
-			} else {
-				DEBUG("%s stat returned %d\n", tmp_path, errno);
+				err = stat(full_path, &st);
+
+				if (err == 0) {
+					gmtime_s(&st.st_ctim.tv_sec, &tm);
+					gen_list_format(buffer, sizeof(buffer),
+						st.st_mode,
+						st.st_size,
+						tm,
+						dent->d_name,
+						cur_tm);
+
+					client_send_data_msg(client, buffer);
+					memset(buffer, 0, sizeof(buffer));
+				} else {
+					DEBUG("%s stat returned %d\n", full_path, errno);
+				}
 			}
 			dent = (struct dirent *)((void *)dent + dent->d_reclen);
 		}
@@ -350,8 +373,9 @@ static void cmd_LIST_func(ftps4_client_info_t *client)
 {
 	char list_path[PATH_MAX];
 	int list_cur_path = 1;
-
-	int n = sscanf(client->recv_buffer, "%*s %[^\r\n\t]", list_path);
+	int n = !client->recv_cmd_args
+		? 0
+		: sscanf(client->recv_cmd_args, "%[^\r\n\t]", list_path);
 
 	if (n > 0 && file_exists(list_path))
 		list_cur_path = 0;
@@ -365,7 +389,7 @@ static void cmd_LIST_func(ftps4_client_info_t *client)
 static void cmd_PWD_func(ftps4_client_info_t *client)
 {
 	char msg[PATH_MAX];
-	sprintf(msg, "257 \"%s\" is the current directory." FTPS4_EOL, client->cur_path);
+	snprintf(msg, sizeof(msg), "257 \"%s\" is the current directory." FTPS4_EOL, client->cur_path);
 	client_send_ctrl_msg(client, msg);
 }
 
@@ -389,7 +413,9 @@ static void cmd_CWD_func(ftps4_client_info_t *client)
 	char cmd_path[PATH_MAX];
 	char tmp_path[PATH_MAX];
 	int pd;
-	int n = sscanf(client->recv_buffer, "%*s %[^\r\n\t]", cmd_path);
+	int n = !client->recv_cmd_args
+		? 0
+		: sscanf(client->recv_cmd_args, "%[^\r\n\t]", cmd_path);
 
 	if (n < 1) {
 		client_send_ctrl_msg(client, "500 Syntax error, command unrecognized." FTPS4_EOL);
@@ -403,9 +429,9 @@ static void cmd_CWD_func(ftps4_client_info_t *client)
 				strcpy(tmp_path, cmd_path);
 			} else { /* Change dir relative to current dir */
 				if (strcmp(client->cur_path, "/") == 0)
-					sprintf(tmp_path, "%s%s", client->cur_path, cmd_path);
+					snprintf(tmp_path, sizeof(tmp_path), "%s%s", client->cur_path, cmd_path);
 				else
-					sprintf(tmp_path, "%s/%s", client->cur_path, cmd_path);
+					snprintf(tmp_path, sizeof(tmp_path), "%s/%s", client->cur_path, cmd_path);
 			}
 
 			/* If the path is not "/", check if it exists */
@@ -428,7 +454,9 @@ static void cmd_TYPE_func(ftps4_client_info_t *client)
 {
 	char data_type;
 	char format_control[8];
-	int n_args = sscanf(client->recv_buffer, "%*s %c %s", &data_type, format_control);
+	int n_args = !client->recv_cmd_args
+		? 0
+		: sscanf(client->recv_cmd_args, "%c %s", &data_type, format_control);
 
 	if (n_args > 0) {
 		switch(data_type) {
@@ -489,27 +517,34 @@ static void send_file(ftps4_client_info_t *client, const char *path)
 	}
 }
 
-/* This function generates a PS4 valid path with the input path
+/* This function generates a FTP full-path valid path with the input path (relative or absolute)
  * from RETR, STOR, DELE, RMD, MKD, RNFR and RNTO commands */
-static void gen_filepath(ftps4_client_info_t *client, char *dest_path)
+static void gen_ftp_fullpath(ftps4_client_info_t *client, char *path, size_t path_size)
 {
 	char cmd_path[PATH_MAX];
-	sscanf(client->recv_buffer, "%*[^ ] %[^\r\n\t]", cmd_path);
+	int n = !client->recv_cmd_args
+		? 0
+		: sscanf(client->recv_cmd_args, "%[^\r\n\t]", cmd_path);
+
+	if (n < 1) {
+		client_send_ctrl_msg(client, "500 Syntax error, command unrecognized." FTPS4_EOL);
+		return;
+	}
 
 	if (cmd_path[0] == '/') {
 		/* Full path */
-		strcpy(dest_path, cmd_path);
+		strncpy(path, cmd_path, path_size);
 	} else {
 		/* The file is relative to current dir, so
 		 * append the file to the current path */
-		sprintf(dest_path, "%s/%s", client->cur_path, cmd_path);
+		snprintf(path, path_size, "%s/%s", client->cur_path, cmd_path);
 	}
 }
 
 static void cmd_RETR_func(ftps4_client_info_t *client)
 {
 	char dest_path[PATH_MAX];
-	gen_filepath(client, dest_path);
+	gen_ftp_fullpath(client, dest_path, sizeof(dest_path));
 	send_file(client, dest_path);
 }
 
@@ -565,7 +600,7 @@ static void receive_file(ftps4_client_info_t *client, const char *path)
 static void cmd_STOR_func(ftps4_client_info_t *client)
 {
 	char dest_path[PATH_MAX];
-	gen_filepath(client, dest_path);
+	gen_ftp_fullpath(client, dest_path, sizeof(dest_path));
 	receive_file(client, dest_path);
 }
 
@@ -583,7 +618,7 @@ static void delete_file(ftps4_client_info_t *client, const char *path)
 static void cmd_DELE_func(ftps4_client_info_t *client)
 {
 	char dest_path[PATH_MAX];
-	gen_filepath(client, dest_path);
+	gen_ftp_fullpath(client, dest_path, sizeof(dest_path));
 	delete_file(client, dest_path);
 }
 
@@ -593,18 +628,18 @@ static void delete_dir(ftps4_client_info_t *client, const char *path)
 	DEBUG("Deleting: %s\n", path);
 	ret = rmdir(path);
 	if (ret >= 0) {
-		client_send_ctrl_msg(client, "226 Directory deleted.\n");
+		client_send_ctrl_msg(client, "226 Directory deleted." FTPS4_EOL);
 	} else if (errno == 66) { /* ENOTEMPTY */
-		client_send_ctrl_msg(client, "550 Directory is not empty.\n");
+		client_send_ctrl_msg(client, "550 Directory is not empty." FTPS4_EOL);
 	} else {
-		client_send_ctrl_msg(client, "550 Could not delete the directory.\n");
+		client_send_ctrl_msg(client, "550 Could not delete the directory." FTPS4_EOL);
 	}
 }
 
 static void cmd_RMD_func(ftps4_client_info_t *client)
 {
 	char dest_path[PATH_MAX];
-	gen_filepath(client, dest_path);
+	gen_ftp_fullpath(client, dest_path, sizeof(dest_path));
 	delete_dir(client, dest_path);
 }
 
@@ -622,7 +657,7 @@ static void create_dir(ftps4_client_info_t *client, const char *path)
 static void cmd_MKD_func(ftps4_client_info_t *client)
 {
 	char dest_path[PATH_MAX];
-	gen_filepath(client, dest_path);
+	gen_ftp_fullpath(client, dest_path, sizeof(dest_path));
 	create_dir(client, dest_path);
 }
 
@@ -630,7 +665,7 @@ static void cmd_RNFR_func(ftps4_client_info_t *client)
 {
 	char from_path[PATH_MAX];
 	/* Get the origin filename */
-	gen_filepath(client, from_path);
+	gen_ftp_fullpath(client, from_path, sizeof(from_path));
 
 	/* Check if the file exists */
 	if (!file_exists(from_path)) {
@@ -639,14 +674,14 @@ static void cmd_RNFR_func(ftps4_client_info_t *client)
 	}
 	/* The file to be renamed is the received path */
 	strcpy(client->rename_path, from_path);
-	client_send_ctrl_msg(client, "250 I need the destination name b0ss." FTPS4_EOL);
+	client_send_ctrl_msg(client, "350 I need the destination name b0ss." FTPS4_EOL);
 }
 
 static void cmd_RNTO_func(ftps4_client_info_t *client)
 {
 	char path_to[PATH_MAX];
 	/* Get the destination filename */
-	gen_filepath(client, path_to);
+	gen_ftp_fullpath(client, path_to, sizeof(path_to));
 
 	DEBUG("Renaming: %s to %s\n", client->rename_path, path_to);
 
@@ -663,7 +698,7 @@ static void cmd_SIZE_func(ftps4_client_info_t *client)
 	char path[PATH_MAX];
 	char cmd[64];
 	/* Get the filename to retrieve its size */
-	gen_filepath(client, path);
+	gen_ftp_fullpath(client, path, sizeof(path));
 
 	/* Check if the file exists */
 	if (stat(path, &s) < 0) {
@@ -699,7 +734,7 @@ static void cmd_APPE_func(ftps4_client_info_t *client)
 	a broken transfer */
 	client->restore_point = -1;
 	char dest_path[PATH_MAX];
-	gen_filepath(client, dest_path);
+	gen_ftp_fullpath(client, dest_path, sizeof(dest_path));
 	receive_file(client, dest_path);
 }
 
@@ -849,8 +884,12 @@ static void *client_thread(void *arg)
 
 			INFO("\t%i> %s", client->num, client->recv_buffer);
 
-			/* The command are the first chars until the first space */
+			/* The command is the first chars until the first space */
 			sscanf(client->recv_buffer, "%s", cmd);
+
+			client->recv_cmd_args = strchr(client->recv_buffer, ' ');
+			if (client->recv_cmd_args)
+				client->recv_cmd_args++; /* Skip the space */
 
 			/* Wait 1 ms before sending any data */
 			sceKernelUsleep(1*1000);
@@ -1110,7 +1149,7 @@ void ftps4_ext_client_send_data_msg(ftps4_client_info_t *client, const char *str
 	client_send_data_msg(client, str);
 }
 
-void ftps4_gen_filepath(ftps4_client_info_t *client, char *dest_path)
+void ftps4_gen_ftp_fullpath(ftps4_client_info_t *client, char *path, size_t path_size)
 {
-	gen_filepath(client, dest_path);
+	gen_ftp_fullpath(client, path, path_size);
 }

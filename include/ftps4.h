@@ -48,6 +48,8 @@ typedef struct ftps4_client_info {
 	/* Receive buffer attributes */
 	int n_recv;
 	char recv_buffer[512];
+	/* Points to the character after the first space */
+	const char *recv_cmd_args;
 	/* Current working directory */
 	char cur_path[PATH_MAX];
 	/* Rename path */
@@ -66,6 +68,6 @@ int ftps4_ext_add_custom_command(const char *cmd, cmd_dispatch_func func);
 int ftps4_ext_del_custom_command(const char *cmd);
 void ftps4_ext_client_send_ctrl_msg(ftps4_client_info_t *client, const char *msg);
 void ftps4_ext_client_send_data_msg(ftps4_client_info_t *client, const char *str);
-void ftps4_gen_filepath(ftps4_client_info_t *client, char *dest_path);
+void ftps4_gen_ftp_fullpath(ftps4_client_info_t *client, char *path, size_t path_size);
 
 #endif
