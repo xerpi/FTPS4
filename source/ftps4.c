@@ -1109,3 +1109,8 @@ void ftps4_ext_client_send_data_msg(ftps4_client_info_t *client, const char *str
 {
 	client_send_data_msg(client, str);
 }
+
+void ftps4_gen_filepath(ftps4_client_info_t *client, char *dest_path)
+{
+	gen_filepath(client, dest_path);
+}
