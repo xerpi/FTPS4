@@ -278,7 +278,7 @@ static char file_type_char(mode_t mode)
 }
 
 static int gen_list_format(char *out, int n, mode_t file_mode, unsigned long long file_size,
-	const struct tm file_tm, const char *file_name, const struct tm cur_tm)
+	const struct tm file_tm, const char *file_name, const char *link_name, const struct tm cur_tm)
 {
 	static const char num_to_month[][4] = {
 		"Jan", "Feb", "Mar", "Apr", "May", "Jun",
@@ -294,22 +294,52 @@ static int gen_list_format(char *out, int n, mode_t file_mode, unsigned long lon
 		snprintf(yt, sizeof(yt), "%04d", 1900 + file_tm.tm_year);
 	}
 
-	return snprintf(out, n,
-		"%c%s 1 ps4 ps4 %llu %s %2d %s %s" FTPS4_EOL,
-		file_type_char(file_mode),
-		S_ISDIR(file_mode) ? "rwxr-xr-x" : "rw-r--r--",
-		file_size,
-		num_to_month[file_tm.tm_mon%12],
-		file_tm.tm_mday,
-		yt,
-		file_name);
+	if (!S_ISLNK(file_mode)) {
+		return snprintf(out, n,
+			"%c%c%c%c%c%c%c%c%c%c 1 ps4 ps4 %llu %s %2d %s %s" FTPS4_EOL,
+			file_type_char(file_mode),
+			file_mode & 0400 ? 'r' : '-',
+			file_mode & 0200 ? 'w' : '-',
+			file_mode & 0100 ? (S_ISDIR(file_mode) ? 's' : 'x') : (S_ISDIR(file_mode) ? 'S' : '-'),
+			file_mode & 040 ? 'r' : '-',
+			file_mode & 020 ? 'w' : '-',
+			file_mode & 010 ? (S_ISDIR(file_mode) ? 's' : 'x') : (S_ISDIR(file_mode) ? 'S' : '-'),
+			file_mode & 04 ? 'r' : '-',
+			file_mode & 02 ? 'w' : '-',
+			file_mode & 01 ? (S_ISDIR(file_mode) ? 's' : 'x') : (S_ISDIR(file_mode) ? 'S' : '-'),
+			file_size,
+			num_to_month[file_tm.tm_mon%12],
+			file_tm.tm_mday,
+			yt,
+			file_name);
+	}
+	else {
+		return snprintf(out, n,
+			"%c%c%c%c%c%c%c%c%c%c 1 ps4 ps4 %llu %s %2d %s %s -> %s" FTPS4_EOL,
+			file_type_char(file_mode),
+			file_mode & 0400 ? 'r' : '-',
+			file_mode & 0200 ? 'w' : '-',
+			file_mode & 0100 ? (S_ISDIR(file_mode) ? 's' : 'x') : (S_ISDIR(file_mode) ? 'S' : '-'),
+			file_mode & 040 ? 'r' : '-',
+			file_mode & 020 ? 'w' : '-',
+			file_mode & 010 ? (S_ISDIR(file_mode) ? 's' : 'x') : (S_ISDIR(file_mode) ? 'S' : '-'),
+			file_mode & 04 ? 'r' : '-',
+			file_mode & 02 ? 'w' : '-',
+			file_mode & 01 ? (S_ISDIR(file_mode) ? 's' : 'x') : (S_ISDIR(file_mode) ? 'S' : '-'),
+			file_size,
+			num_to_month[file_tm.tm_mon%12],
+			file_tm.tm_mday,
+			yt,
+			file_name,
+			link_name);
+	}
 }
 
 static void send_LIST(ftps4_client_info_t *client, const char *path)
 {
 	char buffer[512];
 	char dentbuf[512];
-	int dfd, dentsize, err;
+	int dfd, dentsize, err, readlinkerr;
 	struct dirent *dent, *dend;
 	struct stat st;
 	time_t cur_time;
@@ -342,12 +372,23 @@ static void send_LIST(ftps4_client_info_t *client, const char *path)
 				err = stat(full_path, &st);
 
 				if (err == 0) {
+					char link_path[PATH_MAX];
+					if (S_ISLNK(st.st_mode)) {
+						if ((readlinkerr = readlink(full_path, link_path, sizeof(link_path))) > 0) {
+							link_path[readlinkerr] = 0;
+						}
+						else {
+							link_path[0] = 0;
+						}
+					}
+
 					gmtime_s(&st.st_ctim.tv_sec, &tm);
 					gen_list_format(buffer, sizeof(buffer),
 						st.st_mode,
 						st.st_size,
 						tm,
 						dent->d_name,
+						S_ISLNK(st.st_mode) && link_path[0] != '\0' ? link_path : NULL,
 						cur_tm);
 
 					client_send_data_msg(client, buffer);
