@@ -294,45 +294,33 @@ static int gen_list_format(char *out, int n, mode_t file_mode, unsigned long lon
 		snprintf(yt, sizeof(yt), "%04d", 1900 + file_tm.tm_year);
 	}
 
-	if (!S_ISLNK(file_mode)) {
-		return snprintf(out, n,
-			"%c%c%c%c%c%c%c%c%c%c 1 ps4 ps4 %llu %s %2d %s %s" FTPS4_EOL,
-			file_type_char(file_mode),
-			file_mode & 0400 ? 'r' : '-',
-			file_mode & 0200 ? 'w' : '-',
-			file_mode & 0100 ? (S_ISDIR(file_mode) ? 's' : 'x') : (S_ISDIR(file_mode) ? 'S' : '-'),
-			file_mode & 040 ? 'r' : '-',
-			file_mode & 020 ? 'w' : '-',
-			file_mode & 010 ? (S_ISDIR(file_mode) ? 's' : 'x') : (S_ISDIR(file_mode) ? 'S' : '-'),
-			file_mode & 04 ? 'r' : '-',
-			file_mode & 02 ? 'w' : '-',
-			file_mode & 01 ? (S_ISDIR(file_mode) ? 's' : 'x') : (S_ISDIR(file_mode) ? 'S' : '-'),
-			file_size,
-			num_to_month[file_tm.tm_mon%12],
-			file_tm.tm_mday,
-			yt,
-			file_name);
+#define LIST_FMT "%c%c%c%c%c%c%c%c%c%c 1 ps4 ps4 %llu %s %2d %s %s"
+#define LIST_ARGS \
+			file_type_char(file_mode), \
+			file_mode & 0400 ? 'r' : '-', \
+			file_mode & 0200 ? 'w' : '-', \
+			file_mode & 0100 ? (S_ISDIR(file_mode) ? 's' : 'x') : (S_ISDIR(file_mode) ? 'S' : '-'), \
+			file_mode & 040 ? 'r' : '-', \
+			file_mode & 020 ? 'w' : '-', \
+			file_mode & 010 ? (S_ISDIR(file_mode) ? 's' : 'x') : (S_ISDIR(file_mode) ? 'S' : '-'), \
+			file_mode & 04 ? 'r' : '-', \
+			file_mode & 02 ? 'w' : '-', \
+			file_mode & 01 ? (S_ISDIR(file_mode) ? 's' : 'x') : (S_ISDIR(file_mode) ? 'S' : '-'), \
+			file_size, \
+			num_to_month[file_tm.tm_mon%12], \
+			file_tm.tm_mday, \
+			yt, \
+			file_name
+
+	if (!S_ISLNK(file_mode) || link_name[0] == '\0') {
+		return snprintf(out, n, LIST_FMT FTPS4_EOL, LIST_ARGS);
 	}
 	else {
-		return snprintf(out, n,
-			"%c%c%c%c%c%c%c%c%c%c 1 ps4 ps4 %llu %s %2d %s %s -> %s" FTPS4_EOL,
-			file_type_char(file_mode),
-			file_mode & 0400 ? 'r' : '-',
-			file_mode & 0200 ? 'w' : '-',
-			file_mode & 0100 ? (S_ISDIR(file_mode) ? 's' : 'x') : (S_ISDIR(file_mode) ? 'S' : '-'),
-			file_mode & 040 ? 'r' : '-',
-			file_mode & 020 ? 'w' : '-',
-			file_mode & 010 ? (S_ISDIR(file_mode) ? 's' : 'x') : (S_ISDIR(file_mode) ? 'S' : '-'),
-			file_mode & 04 ? 'r' : '-',
-			file_mode & 02 ? 'w' : '-',
-			file_mode & 01 ? (S_ISDIR(file_mode) ? 's' : 'x') : (S_ISDIR(file_mode) ? 'S' : '-'),
-			file_size,
-			num_to_month[file_tm.tm_mon%12],
-			file_tm.tm_mday,
-			yt,
-			file_name,
-			link_name);
+		return snprintf(out, n, LIST_FMT " -> %s" FTPS4_EOL, LIST_ARGS, link_name);
 	}
+
+#undef LIST_ARGS
+#undef LIST_FMT
 }
 
 static void send_LIST(ftps4_client_info_t *client, const char *path)
