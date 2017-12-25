@@ -275,7 +275,7 @@ static int gen_list_format(char *out, int n, mode_t mode, unsigned long long fil
 		"Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
 	};
 	return snprintf(out, n,
-		"%c%s 1 ps4 ps4 %u %s %2d %02d:%02d %s" FTPS4_EOL,
+		"%c%s 1 ps4 ps4 %llu %s %2d %02d:%02d %s" FTPS4_EOL,
 		file_type_char(mode),
 		S_ISDIR(mode) ? "rwxr-xr-x" : "rw-r--r--",
 		file_size,
