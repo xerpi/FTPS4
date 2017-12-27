@@ -6,9 +6,9 @@
 #include "ftps4.h"
 
 #undef  SHOW_DEBUG
-#define PS4_IP   "192.168.0.14"
+#define PS4_IP   "192.168.0.14\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0"
 #define PS4_PORT 1337
-#define LOG_IP   "192.168.0.4"
+#define LOG_IP   "192.168.0.4\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0"
 #define LOG_PORT 9023
 
 int log_sock;
