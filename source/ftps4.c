@@ -326,12 +326,21 @@ static int gen_list_format(char *out, int n, mode_t file_mode, unsigned long lon
 static void send_LIST(ftps4_client_info_t *client, const char *path)
 {
 	char buffer[512];
-	char dentbuf[512];
+	uint8_t* dentbuf;
+	size_t dentbufsize;
 	int dfd, dentsize, err, readlinkerr;
 	struct dirent *dent, *dend;
 	struct stat st;
 	time_t cur_time;
 	struct tm tm, cur_tm;
+
+	if (stat(path, &st) < 0) {
+		client_send_ctrl_msg(client, "550 Invalid directory." FTPS4_EOL);
+		return;
+	}
+
+	dentbufsize = st.st_blksize;
+	DEBUG("dent buffer size = %lx\n", dentbufsize);
 
 	dfd = open(path, O_RDONLY, 0);
 	if (dfd < 0) {
@@ -339,7 +348,8 @@ static void send_LIST(ftps4_client_info_t *client, const char *path)
 		return;
 	}
 
-	memset(dentbuf, 0, sizeof(dentbuf));
+	dentbuf = (uint8_t*)malloc(dentbufsize);
+	memset(dentbuf, 0, dentbufsize);
 
 	client_send_ctrl_msg(client, "150 Opening ASCII mode data transfer for LIST." FTPS4_EOL);
 
@@ -348,7 +358,7 @@ static void send_LIST(ftps4_client_info_t *client, const char *path)
 	time(&cur_time);
 	gmtime_s(&cur_time, &cur_tm);
 
-	while ((dentsize = getdents(dfd, dentbuf, sizeof(dentbuf))) != 0) {
+	while ((dentsize = getdents(dfd, (char*)dentbuf, dentbufsize)) > 0) {
 		dent = (struct dirent *)dentbuf;
 		dend = (struct dirent *)(&dentbuf[dentsize]);
 
@@ -385,12 +395,16 @@ static void send_LIST(ftps4_client_info_t *client, const char *path)
 					DEBUG("%s stat returned %d\n", full_path, errno);
 				}
 			}
+			else {
+				DEBUG("got empty dent\n");
+			}
 			dent = (struct dirent *)((void *)dent + dent->d_reclen);
 		}
-		memset(dentbuf, 0, sizeof(dentbuf));
+		memset(dentbuf, 0, dentbufsize);
 	}
 
 	close(dfd);
+	free(dentbuf);
 
 	DEBUG("Done sending LIST\n");
 
