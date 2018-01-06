@@ -119,7 +119,74 @@ struct kpayload_args{
 
 // DebugSettings Definitions end here
 
+int kpayload(struct thread *td, struct kpayload_args* args){
 
+	struct ucred* cred;
+	struct filedesc* fd;
+
+	fd = td->td_proc->p_fd;
+	cred = td->td_proc->p_ucred;
+
+	void* kernel_base = &((uint8_t*)__readmsr(0xC0000082))[-0x30EB30];
+	uint8_t* kernel_ptr = (uint8_t*)kernel_base;
+	void** got_prison0 =   (void**)&kernel_ptr[0xF26010];
+	void** got_rootvnode = (void**)&kernel_ptr[0x206D250];
+
+	// resolve kernel functions
+
+	int (*copyout)(const void *kaddr, void *uaddr, size_t len) = (void *)(kernel_base + 0x286d70);
+	int (*printfkernel)(const char *fmt, ...) = (void *)(kernel_base + 0x347580);
+
+	cred->cr_uid = 0;
+	cred->cr_ruid = 0;
+	cred->cr_rgid = 0;
+	cred->cr_groups[0] = 0;
+
+	cred->cr_prison = *got_prison0;
+	fd->fd_rdir = fd->fd_jdir = *got_rootvnode;
+	
+	// uart enabler
+	*(char *)(kernel_base + 0x186b0a0) = 0; // set the console disable console output bool
+
+	// specters debug settings patchs
+	*(char *)(kernel_base + 0x186b0a0) = 0; 
+	*(char *)(kernel_base + 0x2001516) |= 0x14;
+	*(char *)(kernel_base + 0x2001539) |= 1;
+	*(char *)(kernel_base + 0x2001539) |= 2;
+	*(char *)(kernel_base + 0x200153A) |= 1;
+	*(char *)(kernel_base + 0x2001558) |= 1;	
+
+	// Disable write protection
+
+	uint64_t cr0 = readCr0();
+	writeCr0(cr0 & ~X86_CR0_WP);
+
+	// debug menu full patches thanks to sealab
+
+	*(uint32_t *)(kernel_base + 0x4CECB7) = 0;
+	*(uint32_t *)(kernel_base + 0x4CFB9B) = 0;
+
+	// Target ID Patches :)
+
+	*(uint16_t *)(kernel_base + 0x1FE59E4) = 0x8101;
+	*(uint16_t *)(kernel_base + 0X1FE5A2C) = 0x8101;
+	*(uint16_t *)(kernel_base + 0x200151C) = 0x8101;
+
+	// Say hello and put the kernel base in userland so we can use later
+
+	printfkernel("\n\n\nHELLO FROM YOUR KERN DUDE =)\n\n\n");
+
+	printfkernel("kernel base is:0x%016llx\n", kernel_base);
+
+	uint64_t uaddr;
+	memcpy(&uaddr,&args[2],8);
+
+	printfkernel("uaddr is:0x%016llx\n", uaddr);
+
+	copyout(&kernel_base, uaddr, 8);
+
+	return 0;
+}
 
 // DebugSettings END
 // DebugSettings END
@@ -237,77 +304,6 @@ void custom_UMT(ftps4_client_info_t *client)
 }
 
 
-int kpayload(struct thread *td, struct kpayload_args* args){
-
-	struct ucred* cred;
-	struct filedesc* fd;
-
-	fd = td->td_proc->p_fd;
-	cred = td->td_proc->p_ucred;
-
-	void* kernel_base = &((uint8_t*)__readmsr(0xC0000082))[-0x30EB30];
-	uint8_t* kernel_ptr = (uint8_t*)kernel_base;
-	void** got_prison0 =   (void**)&kernel_ptr[0xF26010];
-	void** got_rootvnode = (void**)&kernel_ptr[0x206D250];
-
-	// resolve kernel functions
-
-	int (*copyout)(const void *kaddr, void *uaddr, size_t len) = (void *)(kernel_base + 0x286d70);
-	int (*printfkernel)(const char *fmt, ...) = (void *)(kernel_base + 0x347580);
-
-	cred->cr_uid = 0;
-	cred->cr_ruid = 0;
-	cred->cr_rgid = 0;
-	cred->cr_groups[0] = 0;
-
-	cred->cr_prison = *got_prison0;
-	fd->fd_rdir = fd->fd_jdir = *got_rootvnode;
-	
-	// uart enabler
-	uint16_t *securityFlags = (uint64_t *)(kernel_base+0x2001516);
-	*securityFlags = *securityFlags & ~(1 << 15);
-
-	// specters debug settings patchs
-	*(char *)(kernel_base + 0x186b0a0) = 0; 
-	*(char *)(kernel_base + 0x2001516) |= 0x14;
-	*(char *)(kernel_base + 0x2001539) |= 1;
-	*(char *)(kernel_base + 0x2001539) |= 2;
-	*(char *)(kernel_base + 0x200153A) |= 1;
-	*(char *)(kernel_base + 0x2001558) |= 1;	
-
-	// Disable write protection
-
-	uint64_t cr0 = readCr0();
-	writeCr0(cr0 & ~X86_CR0_WP);
-
-	// debug menu full patches thanks to sealab
-
-	*(uint32_t *)(kernel_base + 0x4CECB7) = 0;
-	*(uint32_t *)(kernel_base + 0x4CFB9B) = 0;
-
-	// Target ID Patches :)
-
-	*(uint16_t *)(kernel_base + 0x1FE59E4) = 0x8101;
-	*(uint16_t *)(kernel_base + 0X1FE5A2C) = 0x8101;
-	*(uint16_t *)(kernel_base + 0x200151C) = 0x8101;
-
-	// Say hello and put the kernel base in userland so we can use later
-
-	printfkernel("\n\n\nHELLO FROM YOUR KERN DUDE =)\n\n\n");
-
-	printfkernel("kernel base is:0x%016llx\n", kernel_base);
-
-	uint64_t uaddr;
-	memcpy(&uaddr,&args[2],8);
-
-	printfkernel("uaddr is:0x%016llx\n", uaddr);
-
-	copyout(&kernel_base, uaddr, 8);
-
-	return 0;
-}
-
-
 int _main(struct thread *td){
 
 	run = 1;
@@ -316,11 +312,6 @@ int _main(struct thread *td){
 	initLibc();
 	initNetwork();
 	initPthread();
-
-	// patch some things in the kernel (sandbox, prison, debug settings etc..)
-	int sRet = syscall(11,kpayload,td);
-
-	printfsocket("kernel patched!\n");
 
 	// create our server
 	struct sockaddr_in server;
@@ -333,14 +324,16 @@ int _main(struct thread *td){
 	//server.sin_port = sceNetHtons(9023);
 	memset(server.sin_zero, 0, sizeof(server.sin_zero));
 	
-	int sock = sceNetSocket("netdebug", AF_INET, SOCK_STREAM, 0);
+	//int sock = sceNetSocket("netdebug", AF_INET, SOCK_STREAM, 0);
+	sock = sceNetSocket("netdebug", AF_INET, SOCK_STREAM, 0);
 	sceNetConnect(sock, (struct sockaddr *)&server, sizeof(server));
 	
-	int flag = 1;
-	sceNetSetsockopt(sock, IPPROTO_TCP, TCP_NODELAY, (char *)&flag, sizeof(int));
+	//Might be duplicate
+	//int flag = 1;
+	//sceNetSetsockopt(sock, IPPROTO_TCP, TCP_NODELAY, (char *)&flag, sizeof(int));
 
-	
-	uint64_t* dump = mmap(NULL, 0x1000, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
+	//nodump
+	//uint64_t* dump = mmap(NULL, 0x1000, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
 
 
 	printfsocket("connected\n");
@@ -349,21 +342,31 @@ int _main(struct thread *td){
 	// retreive the kernel base copied into userland memory and set it
 	uint64_t kbase;
 
-	memcpy(&kbase,dump,8);
+	//nodump
+	//memcpy(&kbase,dump,8);
 
 	printfsocket("kernBase is:0x%016llx\n",kbase);
-	printfsocket("dump is:0x%016llx\n",dump);
+	//nodump
+	//printfsocket("dump is:0x%016llx\n",dump);
 
-	//int sRet = syscall(dump);
+	// patch some things in the kernel (sandbox, prison, debug settings etc..)
+	int sRet = syscall(11,kpayload,td);
+	//nodump
+	//int sRet = syscall(11,kpayload,td,dump);
+
+
+	printfsocket("kernel patched!\n");
 
 	// kdump payload loop woz 'ere
 
-	free(dump);
-	sceNetSocketClose(sock);
+	//nodump
+	//free(dump);
+
+	//sceNetSocketClose(sock);
     // return 0;
 
-	sock = sceNetSocket("netdebug", AF_INET, SOCK_STREAM, 0);
-	sceNetConnect(sock, (struct sockaddr *)&server, sizeof(server));
+	//sock = sceNetSocket("netdebug", AF_INET, SOCK_STREAM, 0);
+	//sceNetConnect(sock, (struct sockaddr *)&server, sizeof(server));
 
 	ftps4_set_info_log_cb(info_log);
 #ifdef SHOW_DEBUG
