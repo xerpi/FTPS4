@@ -356,11 +356,11 @@ int _main(struct thread *td){
 	// kdump payload loop woz 'ere
 
 	free(dump);
-	//sceNetSocketClose(sock);
+	sceNetSocketClose(sock);
     // return 0;
 
-	//sock = sceNetSocket("netdebug", AF_INET, SOCK_STREAM, 0);
-	//sceNetConnect(sock, (struct sockaddr *)&server, sizeof(server));
+	sock = sceNetSocket("netdebug", AF_INET, SOCK_STREAM, 0);
+	sceNetConnect(sock, (struct sockaddr *)&server, sizeof(server));
 
 	ftps4_set_info_log_cb(info_log);
 #ifdef SHOW_DEBUG
