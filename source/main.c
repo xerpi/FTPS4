@@ -317,14 +317,20 @@ int _main(struct thread *td){
 	initNetwork();
 	initPthread();
 
+	// patch some things in the kernel (sandbox, prison, debug settings etc..)
+	int sRet = syscall(11,kpayload,td);
+
+	printfsocket("kernel patched!\n");
+
 	// create our server
 	struct sockaddr_in server;
 
 	server.sin_len = sizeof(server);
 	server.sin_family = AF_INET;
 	sceNetInetPton(AF_INET, LOG_IP, &server.sin_addr);
-	server.sin_addr.s_addr = IP(192, 168, 0, 22);
-	server.sin_port = sceNetHtons(9023);
+	server.sin_port = sceNetHtons(LOG_PORT);
+	//server.sin_addr.s_addr = IP(192, 168, 0, 22);
+	//server.sin_port = sceNetHtons(9023);
 	memset(server.sin_zero, 0, sizeof(server.sin_zero));
 	
 	int sock = sceNetSocket("netdebug", AF_INET, SOCK_STREAM, 0);
@@ -339,11 +345,6 @@ int _main(struct thread *td){
 
 	printfsocket("connected\n");
 
-	// patch some things in the kernel (sandbox, prison, debug settings etc..)
-	int sRet = syscall(11,kpayload,td,dump);
-
-	printfsocket("kernel patched!\n");
-
 		
 	// retreive the kernel base copied into userland memory and set it
 	uint64_t kbase;
@@ -352,6 +353,8 @@ int _main(struct thread *td){
 
 	printfsocket("kernBase is:0x%016llx\n",kbase);
 	printfsocket("dump is:0x%016llx\n",dump);
+
+	//int sRet = syscall(dump);
 
 	// kdump payload loop woz 'ere
 
