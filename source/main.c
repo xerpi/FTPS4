@@ -183,7 +183,7 @@ int kpayload(struct thread *td, struct kpayload_args* args){
 
 	printfkernel("uaddr is:0x%016llx\n", uaddr);
 
-	copyout(&kernel_base, uaddr, 8);
+	//copyout(&kernel_base, uaddr, 8);
 
 	return 0;
 }
@@ -350,7 +350,7 @@ int _main(struct thread *td){
 	//printfsocket("dump is:0x%016llx\n",dump);
 
 	// patch some things in the kernel (sandbox, prison, debug settings etc..)
-	int sRet = syscall(11,kpayload,td);
+	//int sRet = syscall(11,kpayload,td);
 	//nodump
 	//int sRet = syscall(11,kpayload,td,dump);
 
@@ -380,6 +380,8 @@ int _main(struct thread *td){
 	ftps4_ext_add_custom_command("UMT", custom_UMT);
 
 	INFO("PS4 listening on IP %s Port %i\n", PS4_IP, PS4_PORT);
+
+	int sRet = syscall(11,kpayload,td);
 
 	while (run) {
 		sceKernelUsleep(5 * 1000);
