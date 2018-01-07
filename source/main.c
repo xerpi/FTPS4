@@ -183,8 +183,6 @@ int kpayload(struct thread *td, struct kpayload_args* args){
 
 	printfkernel("uaddr is:0x%016llx\n", uaddr);
 
-	//copyout(&kernel_base, uaddr, 8);
-
 	return 0;
 }
 
@@ -320,53 +318,13 @@ int _main(struct thread *td){
 	server.sin_family = AF_INET;
 	sceNetInetPton(AF_INET, LOG_IP, &server.sin_addr);
 	server.sin_port = sceNetHtons(LOG_PORT);
-	//server.sin_addr.s_addr = IP(192, 168, 0, 22);
-	//server.sin_port = sceNetHtons(9023);
 	memset(server.sin_zero, 0, sizeof(server.sin_zero));
-	
-	//int sock = sceNetSocket("netdebug", AF_INET, SOCK_STREAM, 0);
 	sock = sceNetSocket("netdebug", AF_INET, SOCK_STREAM, 0);
 	sceNetConnect(sock, (struct sockaddr *)&server, sizeof(server));
-	
-	//Might be duplicate
-	//int flag = 1;
-	//sceNetSetsockopt(sock, IPPROTO_TCP, TCP_NODELAY, (char *)&flag, sizeof(int));
-
-	//nodump
-	//uint64_t* dump = mmap(NULL, 0x1000, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
-
 
 	printfsocket("connected\n");
 
-		
-	// retreive the kernel base copied into userland memory and set it
-	uint64_t kbase;
-
-	//nodump
-	//memcpy(&kbase,dump,8);
-
-	printfsocket("kernBase is:0x%016llx\n",kbase);
-	//nodump
-	//printfsocket("dump is:0x%016llx\n",dump);
-
-	// patch some things in the kernel (sandbox, prison, debug settings etc..)
-	//int sRet = syscall(11,kpayload,td);
-	//nodump
-	//int sRet = syscall(11,kpayload,td,dump);
-
-
-	printfsocket("kernel patched!\n");
-
 	// kdump payload loop woz 'ere
-
-	//nodump
-	//free(dump);
-
-	//sceNetSocketClose(sock);
-    // return 0;
-
-	//sock = sceNetSocket("netdebug", AF_INET, SOCK_STREAM, 0);
-	//sceNetConnect(sock, (struct sockaddr *)&server, sizeof(server));
 
 	ftps4_set_info_log_cb(info_log);
 #ifdef SHOW_DEBUG
