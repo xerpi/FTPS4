@@ -1,9 +1,12 @@
 /*
  * Copyright (c) 2015 Sergi Granell (xerpi)
  */
-
 #include "ps4.h"
 #include "ftps4.h"
+#include "dump.h"
+
+#define DEBUG(...)
+#include "defines.h"
 
 #define UNUSED(x) (void)(x)
 
@@ -26,7 +29,7 @@ static struct {
 } custom_command_dispatchers[MAX_CUSTOM_COMMANDS];
 
 static int ftp_initialized = 0;
-static unsigned int file_buf_size = DEFAULT_FILE_BUF_SIZE;
+static unsigned int file_buf_size;
 static struct in_addr ps4_addr;
 static unsigned short int ps4_port;
 static ScePthread server_thid;
@@ -34,22 +37,6 @@ static int server_sockfd;
 static int number_clients = 0;
 static ftps4_client_info_t *client_list = NULL;
 static ScePthreadMutex client_list_mtx;
-
-static void (*info_log_cb)(const char *) = NULL;
-static void (*debug_log_cb)(const char *) = NULL;
-
-#define log_func(log_cb,s,...) \
-	do { \
-		if (log_cb) { \
-			char buf[512]; \
-			sprintf(buf, s, ##__VA_ARGS__); \
-			log_cb(buf); \
-		} \
-	} while(0)
-
-
-#define DEBUG(...) log_func(debug_log_cb, __VA_ARGS__)
-#define INFO(...) log_func(info_log_cb, __VA_ARGS__)
 
 #define client_send_ctrl_msg(cl, str) \
 	sceNetSend(cl->ctrl_sockfd, str, strlen(str), 0)
@@ -584,11 +571,45 @@ static void gen_ftp_fullpath(ftps4_client_info_t *client, char *path, size_t pat
 	}
 }
 
+static int is_fself(const char *fn)
+{
+	FILE *f;
+	long fSize;
+	uint32_t magic;
+	int ret = 0;
+
+	if((f=fopen(fn, "rb"))==NULL)
+	{
+		return 0;
+	}
+	fseek (f, 0, SEEK_END);
+	fSize = ftell (f);
+	if (fSize >= 4)
+	{
+		fseek (f, 0, SEEK_SET);
+		fread(&magic, 4, 1, f);
+		if (magic == 0x1d3d154f) ret = 1;
+	}
+	fclose(f);
+
+	return ret;
+}
+
 static void cmd_RETR_func(ftps4_client_info_t *client)
 {
 	char dest_path[PATH_MAX];
 	gen_ftp_fullpath(client, dest_path, sizeof(dest_path));
-	send_file(client, dest_path);
+
+	if(is_fself(dest_path))
+	{
+		decrypt_and_dump_self(dest_path, "/user/temp.self");
+		send_file(client, "/user/temp.self");
+		unlink("/user/temp.self");
+	}
+	else
+	{
+		send_file(client, dest_path);
+	}
 }
 
 static void receive_file(ftps4_client_info_t *client, const char *path)
@@ -925,7 +946,7 @@ static void *client_thread(void *arg)
 			DEBUG("Received %i bytes from client number %i:\n",
 				client->n_recv, client->num);
 
-			INFO("\t%i> %s", client->num, client->recv_buffer);
+			printfsocket("\t%i> %s", client->num, client->recv_buffer);
 
 			/* The command is the first chars until the first space */
 			sscanf(client->recv_buffer, "%s", cmd);
@@ -945,17 +966,17 @@ static void *client_thread(void *arg)
 
 		} else if (client->n_recv == 0) {
 			/* Value 0 means connection closed by the remote peer */
-			INFO("Connection closed by the client %i.\n", client->num);
+			printfsocket("Connection closed by the client %i.\n", client->num);
 			/* Delete itself from the client list */
 			client_list_delete(client);
 			break;
 		} else if (client->n_recv == SCE_NET_ERROR_EINTR) {
 			/* Socket aborted (ftps4_fini() called) */
-			INFO("Client %i socket aborted.\n", client->num);
+			printfsocket("Client %i socket aborted.\n", client->num);
 			break;
 		} else {
 			/* Other errors */
-			INFO("Client %i socket error: 0x%08X\n", client->num, client->n_recv);
+			printfsocket("Client %i socket error: 0x%08X\n", client->num, client->n_recv);
 			client_list_delete(client);
 			break;
 		}
@@ -1033,7 +1054,7 @@ static void *server_thread(void *arg)
 				remote_ip,
 				sizeof(remote_ip));
 
-			INFO("Client %i connected, IP: %s port: %i\n",
+			printfsocket("Client %i connected, IP: %s port: %i\n",
 				number_clients, remote_ip, clientaddr.sin_port);
 
 			/* Allocate the ftps4_client_info_t struct for the new client */
@@ -1059,7 +1080,7 @@ static void *server_thread(void *arg)
 
 			number_clients++;
 		} else if (client_sockfd == SCE_NET_ERROR_EINTR) {
-			INFO("Server socket aborted.\n");
+			printfsocket("Server socket aborted.\n");
 			break;
 		} else {
 			/* if sceNetAccept returns < 0, it means that the listening
@@ -1084,6 +1105,8 @@ int ftps4_init(const char *ip, unsigned short int port)
 	if (ftp_initialized) {
 		return -1;
 	}
+
+	file_buf_size = DEFAULT_FILE_BUF_SIZE;
 
 	/* Save the listening port of the PS4 to a global variable */
 	ps4_port = port;
@@ -1139,16 +1162,6 @@ void ftps4_fini()
 int ftps4_is_initialized()
 {
 	return ftp_initialized;
-}
-
-void ftps4_set_info_log_cb(ftps4_log_cb_t cb)
-{
-	info_log_cb = cb;
-}
-
-void ftps4_set_debug_log_cb(ftps4_log_cb_t cb)
-{
-	debug_log_cb = cb;
 }
 
 void ftps4_set_file_buf_size(unsigned int size)
