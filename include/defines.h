@@ -1,7 +1,7 @@
 #ifndef __DEFINES
 #define __DEFINES
 
-#define DEBUG_SOCKET
+//#define DEBUG_SOCKET
 
 #ifdef DEBUG_SOCKET
   extern int sock;
