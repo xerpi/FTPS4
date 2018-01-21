@@ -134,6 +134,8 @@ void do_dump(char *saveFile, int fd, SegmentBufInfo *segBufs, int segBufNum, Elf
             }
             else
             {
+                lseek(fd, -segBufs[i].filesz, SEEK_END);
+                read(fd, buf, segBufs[i].filesz);
                 fseek(sf, segBufs[i].fileoff, SEEK_SET);
                 fwrite(buf, segBufs[i].filesz, 1, sf);
             }
