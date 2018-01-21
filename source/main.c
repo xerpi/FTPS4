@@ -242,11 +242,10 @@ int _main(struct thread *td)
 	// Init and resolve libraries
 	initKernel();
 	initLibc();
+	initNetwork();
 	initPthread();
 
 #ifdef DEBUG_SOCKET
-	initNetwork();
-
 	struct sockaddr_in server;
 
 	server.sin_len = sizeof(server);
