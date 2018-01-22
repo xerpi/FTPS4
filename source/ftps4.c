@@ -770,7 +770,7 @@ static void cmd_SIZE_func(ftps4_client_info_t *client)
 		return;
 	}
 	/* Send the size of the file */
-	sprintf(cmd, "213: %lld" FTPS4_EOL, s.st_size);
+	sprintf(cmd, "213 %lld" FTPS4_EOL, s.st_size);
 	client_send_ctrl_msg(client, cmd);
 }
 
