@@ -2,18 +2,10 @@
  * Copyright (c) 2015 Sergi Granell (xerpi)
  */
 #include "ps4.h"
-#include "ftps4.h"
-
 #include "defines.h"
-
-#define PS4_IP   "192.168.1.100\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0"
-#define PS4_PORT 1337
-#define LOG_IP   "192.168.1.3\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0"
-#define LOG_PORT 9023
-
-#ifdef DEBUG_SOCKET
-int sock;
-#endif
+#include "debug.h"
+#include "ftps4.h"
+#include "dump.h"
 
 int run;
 
@@ -235,8 +227,34 @@ int kpayload(struct thread *td){
 	return 0;
 }
 
+int get_ip_address(char *ip_address)
+{
+	int ret;
+	SceNetCtlInfo info;
+
+	ret = sceNetCtlInit();
+	if (ret < 0)
+		goto error;
+
+	ret = sceNetCtlGetInfo(SCE_NET_CTL_INFO_IP_ADDRESS, &info);
+	if (ret < 0)
+		goto error;
+
+	memcpy(ip_address, info.ip_address, sizeof(info.ip_address));
+
+	sceNetCtlTerm();
+
+	return ret;
+
+error:
+	ip_address = NULL;
+	return -1;
+}
+
 int _main(struct thread *td)
 {
+	char ip_address[SCE_NET_CTL_IPV4_ADDR_STR_LEN];
+
 	run = 1;
 
 	// Init and resolve libraries
@@ -246,30 +264,26 @@ int _main(struct thread *td)
 	initPthread();
 
 #ifdef DEBUG_SOCKET
-	struct sockaddr_in server;
-
-	server.sin_len = sizeof(server);
-	server.sin_family = AF_INET;
-	sceNetInetPton(AF_INET, LOG_IP, &server.sin_addr);
-	server.sin_port = sceNetHtons(LOG_PORT);
-	memset(server.sin_zero, 0, sizeof(server.sin_zero));
-	sock = sceNetSocket("debug", AF_INET, SOCK_STREAM, 0);
-	sceNetConnect(sock, (struct sockaddr *)&server, sizeof(server));
-
-	int flag = 1;
-	sceNetSetsockopt(sock, IPPROTO_TCP, TCP_NODELAY, (char *)&flag, sizeof(int));
+	initDebugSocket();
 #endif
 
 	// patch some things in the kernel (sandbox, prison, debug settings etc..)
 	syscall(11,kpayload,td);
 
-	ftps4_init(PS4_IP, PS4_PORT);
+	int ret = get_ip_address(ip_address);
+	if (ret < 0)
+	{
+		printfsocket("Unable to get IP address: %d\n", ret);
+		goto error;
+	}
+
+	ftps4_init(ip_address, FTP_PORT);
 	ftps4_ext_add_custom_command("SHUTDOWN", custom_SHUTDOWN);
 	ftps4_ext_add_custom_command("MTFR", custom_MTFR);
 	ftps4_ext_add_custom_command("MTTO", custom_MTTO);
 	ftps4_ext_add_custom_command("UMT", custom_UMT);
 
-	printfsocket("PS4 listening on IP %s Port %i\n", PS4_IP, PS4_PORT);
+	printfsocket("PS4 listening on IP %s Port %i\n", PS4_IP, FTP_PORT);
 
 	while (run) {
 		sceKernelUsleep(5 * 1000);
@@ -277,10 +291,11 @@ int _main(struct thread *td)
 
 	ftps4_fini();
 
+error:
 	printfsocket("Bye!");
 
 #ifdef DEBUG_SOCKET
-	sceNetSocketClose(sock);
+	closeDebugSocket();
 #endif
 	return 0;
 }

@@ -1,8 +1,8 @@
 #include "ps4.h"
+#include "defines.h"
+#include "debug.h"
 #include "dump.h"
 #include "elf64.h"
-
-#include "defines.h"
 
 #define TRUE 1
 #define FALSE 0
@@ -15,34 +15,6 @@ typedef struct {
     int enc;
 } SegmentBufInfo;
 
-void hexdump(void* input, int length, int relative)
-{
-  uint8_t* buffer = (uint8_t*)input;
-  int i;
-
-  for (i = 0; i < length; i++)
-  {
-    if ((i % 16) == 0)
-    {
-      printfsocket("%llx :", !relative ? (uint64_t)&buffer[i] : (uint64_t)i);
-    }
-
-    printfsocket(" %02x", buffer[i]);
-
-    if (i > 0 && (i % 16) == 15)
-    {
-      printfsocket("\n");
-    }
-  }
-
-  if ((i % 16) != 0)
-  {
-    printfsocket("\n");
-  }
-
-  //printfsocket("\n");
-}
-
 void print_phdr(Elf64_Phdr *phdr) {
     printfsocket("=================================\n");
     printfsocket("     p_type %08x\n", phdr->p_type);
@@ -53,6 +25,47 @@ void print_phdr(Elf64_Phdr *phdr) {
     printfsocket("     p_filesz %016llx\n", phdr->p_filesz);
     printfsocket("     p_memsz %016llx\n", phdr->p_memsz);
     printfsocket("     p_align %016llx\n", phdr->p_align);
+}
+
+#define SELF_MAGIC	0x1D3D154F
+#define ELF_MAGIC	0x464C457F
+
+int is_self(const char *fn)
+{
+    struct stat st;
+    int res = 0;
+    int fd = open(fn, O_RDONLY, 0);
+    if (fd != -1) {
+        stat(fn, &st);
+        void *addr = mmap(0, 0x4000, PROT_READ | PROT_WRITE, MAP_PRIVATE, fd, 0);
+        if (addr != MAP_FAILED) {
+            printfsocket("mmap %s : %p\n", selfFile, addr);
+            if (st.st_size >= 4)
+            {
+                uint32_t selfMagic = *(uint32_t*)((uint8_t*)addr + 0x00);
+                if (selfMagic == SELF_MAGIC)
+                {
+                    uint16_t snum = *(uint16_t*)((uint8_t*)addr + 0x18);
+                    if (st.st_size >= (0x20 + snum * 0x20 + 4))
+                    {
+                        uint32_t elfMagic = *(uint32_t*)((uint8_t*)addr + 0x20 + snum * 0x20);
+                        if ((selfMagic == SELF_MAGIC) && (elfMagic == ELF_MAGIC))
+                            res = 1;
+                    }
+                }
+            }
+            munmap(addr, 0x4000);
+        }
+        else {
+            printfsocket("mmap file %s err : %s\n", selfFile, strerror(errno));
+        }
+        close(fd);
+    }
+    else {
+        printfsocket("open %s err : %s\n", selfFile, strerror(errno));
+    }
+
+    return res;
 }
 
 int read_decrypt_segment(int fd, uint64_t index, uint64_t offset, size_t size, uint8_t *out) {
@@ -74,8 +87,8 @@ int is_segment_in_other_segment(Elf64_Phdr *phdr, int index, Elf64_Phdr *phdrs, 
         Elf64_Phdr *p = &phdrs[i];
         if (i != index) {
             if (p->p_filesz > 0) {
-                // printfsocket("offset : %016x,  toffset : %016x\n", phdr->p_offset, p->p_offset);
-                // printfsocket("offset : %016x,  toffset + size : %016x\n", phdr->p_offset, p->p_offset + p->p_filesz);
+                printfsocket("offset : %016x,  toffset : %016x\n", phdr->p_offset, p->p_offset);
+                printfsocket("offset : %016x,  toffset + size : %016x\n", phdr->p_offset, p->p_offset + p->p_filesz);
                 if ((phdr->p_offset >= p->p_offset) && ((phdr->p_offset + phdr->p_filesz) <= (p->p_offset + p->p_filesz))) {
                     return TRUE;
                 }
@@ -87,12 +100,12 @@ int is_segment_in_other_segment(Elf64_Phdr *phdr, int index, Elf64_Phdr *phdrs, 
 
 
 SegmentBufInfo *parse_phdr(Elf64_Phdr *phdrs, int num, int *segBufNum) {
-    // printfsocket("segment num : %d\n", num);
+    printfsocket("segment num : %d\n", num);
     SegmentBufInfo *infos = (SegmentBufInfo *)malloc(sizeof(SegmentBufInfo) * num);
     int segindex = 0;
     for (int i = 0; i < num; i += 1) {
         Elf64_Phdr *phdr = &phdrs[i];
-        // print_phdr(phdr);
+        print_phdr(phdr);
 
         if (phdr->p_filesz > 0) {
             if ((!is_segment_in_other_segment(phdr, i, phdrs, num)) || (phdr->p_type == 0x6fffff01)) {
@@ -104,9 +117,9 @@ SegmentBufInfo *parse_phdr(Elf64_Phdr *phdrs, int num, int *segBufNum) {
                 info->fileoff = phdr->p_offset;
                 info->enc = (phdr->p_type != 0x6fffff01) ? TRUE : FALSE;
 
-                // printfsocket("seg buf info %d -->\n", segindex);
-                // printfsocket("    index : %d\n    bufsz : 0x%016llX\n", info->index, info->bufsz);
-                // printfsocket("    filesz : 0x%016llX\n    fileoff : 0x%016llX\n", info->filesz, info->fileoff);
+                printfsocket("seg buf info %d -->\n", segindex);
+                printfsocket("    index : %d\n    bufsz : 0x%016llX\n", info->index, info->bufsz);
+                printfsocket("    filesz : 0x%016llX\n    fileoff : 0x%016llX\n", info->filesz, info->fileoff);
             }
         }
     }
@@ -153,22 +166,22 @@ void decrypt_and_dump_self(char *selfFile, char *saveFile) {
     if (fd != -1) {
         void *addr = mmap(0, 0x4000, PROT_READ | PROT_WRITE, MAP_PRIVATE, fd, 0);
         if (addr != MAP_FAILED) {
-            // printfsocket("mmap %s : %p\n", selfFile, addr);
+            printfsocket("mmap %s : %p\n", selfFile, addr);
 
             uint16_t snum = *(uint16_t*)((uint8_t*)addr + 0x18);
             Elf64_Ehdr *ehdr = (Elf64_Ehdr *)((uint8_t*)addr + 0x20 + snum * 0x20);
-            // printfsocket("ehdr : %p\n", ehdr);
+            printfsocket("ehdr : %p\n", ehdr);
 
             // shdr fix
             ehdr->e_shoff = ehdr->e_shentsize = ehdr->e_shnum = ehdr->e_shstrndx = 0;
 
             Elf64_Phdr *phdrs = (Elf64_Phdr *)((uint8_t *)ehdr + 0x40);
-            // printfsocket("phdrs : %p\n", phdrs);
+            printfsocket("phdrs : %p\n", phdrs);
 
             int segBufNum = 0;
             SegmentBufInfo *segBufs = parse_phdr(phdrs, ehdr->e_phnum, &segBufNum);
             do_dump(saveFile, fd, segBufs, segBufNum, ehdr);
-            // printfsocket("dump completed\n");
+            printfsocket("dump completed\n");
 
             free(segBufs);
             munmap(addr, 0x4000);
@@ -176,6 +189,7 @@ void decrypt_and_dump_self(char *selfFile, char *saveFile) {
         else {
             printfsocket("mmap file %s err : %s\n", selfFile, strerror(errno));
         }
+        close(fd);
     }
     else {
         printfsocket("open %s err : %s\n", selfFile, strerror(errno));

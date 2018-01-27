@@ -2,6 +2,8 @@
  * Copyright (c) 2015 Sergi Granell (xerpi)
  */
 #include "ps4.h"
+#include "defines.h"
+#include "debug.h"
 #include "ftps4.h"
 #include "dump.h"
 
@@ -571,36 +573,12 @@ static void gen_ftp_fullpath(ftps4_client_info_t *client, char *path, size_t pat
 	}
 }
 
-static int is_fself(const char *fn)
-{
-	FILE *f;
-	long fSize;
-	uint32_t magic;
-	int ret = 0;
-
-	if((f=fopen(fn, "rb"))==NULL)
-	{
-		return 0;
-	}
-	fseek (f, 0, SEEK_END);
-	fSize = ftell (f);
-	if (fSize >= 4)
-	{
-		fseek (f, 0, SEEK_SET);
-		fread(&magic, 4, 1, f);
-		if (magic == 0x1d3d154f) ret = 1;
-	}
-	fclose(f);
-
-	return ret;
-}
-
 static void cmd_RETR_func(ftps4_client_info_t *client)
 {
 	char dest_path[PATH_MAX];
 	gen_ftp_fullpath(client, dest_path, sizeof(dest_path));
 
-	if(is_fself(dest_path))
+	if(is_self(dest_path))
 	{
 		decrypt_and_dump_self(dest_path, "/user/temp.self");
 		send_file(client, "/user/temp.self");

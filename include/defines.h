@@ -1,18 +1,13 @@
 #ifndef __DEFINES
 #define __DEFINES
 
+#define FTP_PORT 1337
+
+#define LOG_IP   "192.168.1.3\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0"
+#define LOG_PORT 9023
+
 //#define DEBUG_SOCKET
 
-#ifdef DEBUG_SOCKET
-  extern int sock;
-  #define printfsocket(format, ...)\
-    do {\
-    char __printfsocket_buffer[512];\
-    int __printfsocket_size = sprintf(__printfsocket_buffer, format, ##__VA_ARGS__);\
-    sceNetSend(sock, __printfsocket_buffer, __printfsocket_size, 0);\
-  } while(0)
-#else
-	#define printfsocket(format, ...) (void)0
-#endif
+#define PATH_MAX 255
 
 #endif
