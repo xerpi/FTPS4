@@ -254,6 +254,7 @@ error:
 int _main(struct thread *td)
 {
 	char ip_address[SCE_NET_CTL_IPV4_ADDR_STR_LEN];
+	char msg[64];
 
 	run = 1;
 
@@ -270,10 +271,13 @@ int _main(struct thread *td)
 	// patch some things in the kernel (sandbox, prison, debug settings etc..)
 	syscall(11,kpayload,td);
 
+	initSysUtil();
+	notify("Welcome to FTPS4 v"VERSION);
+
 	int ret = get_ip_address(ip_address);
 	if (ret < 0)
 	{
-		printfsocket("Unable to get IP address: %d\n", ret);
+		notify("Unable to get IP address");
 		goto error;
 	}
 
@@ -283,7 +287,8 @@ int _main(struct thread *td)
 	ftps4_ext_add_custom_command("MTTO", custom_MTTO);
 	ftps4_ext_add_custom_command("UMT", custom_UMT);
 
-	printfsocket("PS4 listening on IP %s Port %i\n", PS4_IP, FTP_PORT);
+	sprintf(msg, "PS4 listening on\nIP %s Port %i", ip_address, FTP_PORT);
+	notify(msg);
 
 	while (run) {
 		sceKernelUsleep(5 * 1000);
@@ -292,7 +297,7 @@ int _main(struct thread *td)
 	ftps4_fini();
 
 error:
-	printfsocket("Bye!");
+	notify("Bye!");
 
 #ifdef DEBUG_SOCKET
 	closeDebugSocket();

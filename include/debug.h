@@ -17,4 +17,6 @@ do {\
 #define printfsocket(format, ...) (void)0
 #endif
 
+void notify(char *message);
+
 #endif
