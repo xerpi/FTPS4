@@ -10,6 +10,7 @@
 *	-IDC for his patches
 *	-Grass Skeu for his original Dump File on 1.76 that most
 *	of this code came from, thanks Skeu!
+*	-WildCard for the base of this kpayload
 *	-Mistawes for converting this to FTP
 *
 ******************************************************************/
