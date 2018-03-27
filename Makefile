@@ -1,3 +1,5 @@
+LIBPS4	:=	$(PS4SDK)/libPS4
+
 TEXT	:=	0x926200000
 DATA	:=	0x926300000
 
@@ -6,23 +8,24 @@ AS		:=	gcc
 OBJCOPY	:=	objcopy
 ODIR	:=	build
 SDIR	:=	source
-IDIRS	:=	-I$(PS4SDK)/include -I. -Iinclude
-LDIRS	:=	-L$(PS4SDK) -L. -Llib
-CFLAGS	:=	$(IDIRS) -O2 -fno-builtin -nostartfiles -nostdlib -Wall -masm=intel -march=btver2 -mtune=btver2 -m64 -mabi=sysv -mcmodel=large -DTEXT_ADDRESS=$(TEXT) -DDATA_ADDRESS=$(DATA)
-SFLAGS	:=	-nostartfiles -nostdlib -march=btver2 -mtune=btver2
-LFLAGS	:=	$(LDIRS) -Ttext=$(TEXT) -Tdata=$(DATA)
+IDIRS	:=	-I$(LIBPS4)/include -I. -Iinclude
+LDIRS	:=	-L$(LIBPS4) -L. -Llib
+CFLAGS	:=	$(IDIRS) -O3 -std=gnu11 -fno-builtin -nostartfiles -nostdlib -Wall -masm=intel -march=btver2 -mtune=btver2 -m64 -mabi=sysv -mcmodel=large
+SFLAGS	:=	-nostartfiles -nostdlib -masm=intel -march=btver2 -mtune=btver2 -m64 -mabi=sysv -mcmodel=large
+LFLAGS	:=	$(LDIRS) -Xlinker -T $(LIBPS4)/linker.x -Wl,--build-id=none -Ttext=$(TEXT) -Tdata=$(DATA)
 CFILES	:=	$(wildcard $(SDIR)/*.c)
 SFILES	:=	$(wildcard $(SDIR)/*.s)
-OBJS	:=	$(patsubst $(SDIR)/%.c, build/%.o, $(CFILES)) $(patsubst $(SDIR)/%.s, build/%.o, $(SFILES))
+OBJS	:=	$(patsubst $(SDIR)/%.c, $(ODIR)/%.o, $(CFILES)) $(patsubst $(SDIR)/%.s, $(ODIR)/%.o, $(SFILES))
 
-LIBS	:=	-lPS4-SDK
+LIBS	:=	-lPS4
 
-TARGET = $(shell basename $(CURDIR))
+TARGET = $(shell basename $(CURDIR)).bin
 
 $(TARGET): $(ODIR) $(OBJS)
-	$(CC) $(PS4SDK)/crt0.s $(ODIR)/*.o -o temp.t $(CFLAGS) $(LFLAGS) $(LIBS)
-	$(OBJCOPY) -O binary temp.t $(TARGET)
-	rm -f temp.t
+	$(CC) $(LIBPS4)/crt0.s $(ODIR)/*.o -o temp.t $(CFLAGS) $(LFLAGS) $(LIBS)
+	$(OBJCOPY) -R .sc_rop temp.t temp.u
+	$(OBJCOPY) -O binary temp.u $(TARGET)
+	rm -f temp.t temp.u
 
 $(ODIR)/%.o: $(SDIR)/%.c
 	$(CC) -c -o $@ $< $(CFLAGS)
