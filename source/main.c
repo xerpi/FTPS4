@@ -288,12 +288,6 @@ int _main(struct thread *td)
 	notify("ALL System Partition Mounted as R/W and with FTPS4 Enabled v"VERSION);
 
 
-	ret = remount_system_partition();
-	if (ret < 0)
-	{
-		notify("Unable to remount system partition");
-	}
-
 	ret = remount_system_ex_partition();
 	if (ret < 0)
 	{
