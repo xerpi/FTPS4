@@ -19,7 +19,7 @@
 
 Credits 
 - SiSTRo
-- Me
+- Joon
 - XVortex
 
 dont forget to visit our Discord or Our website (https://darksoftware.xyz)
