@@ -214,6 +214,10 @@ int kpayload(struct thread *td){
 	// debug menu patches 5.01
 	*(uint32_t *)(kernel_base + 0x4F8C78) = 0;
 	*(uint32_t *)(kernel_base + 0x4F9D8C) = 0;
+	
+	// target_id patches 5.01
+-	*(uint16_t *)(kernel_base + 0x1CD068C) = 0x8101;
+-	*(uint16_t *)(kernel_base + 0x236B7FC) = 0x8101;
 
 	// enable mmap of all SELF 5.01
 	*(uint8_t*)(kernel_base + 0x117B0) = 0xB0;
