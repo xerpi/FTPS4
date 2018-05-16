@@ -22,7 +22,7 @@ Credits
 - Joon
 - Flatz
 - XVortex
--Anyone else i dont know :/
+- Anyone else i dont know :/
 
 dont forget to visit our Discord or Our website (https://darksoftware.xyz)
 
