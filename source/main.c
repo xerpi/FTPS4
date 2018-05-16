@@ -305,7 +305,7 @@ int _main(struct thread *td)
 		notify("Unable to remount system partition");
 	}
 
-	ret = remount_ preinst2_partition();
+	ret = remount_preinst2_partition();
 	if (ret < 0)
 	{
 		notify("Unable to remount preinst2 partition");
