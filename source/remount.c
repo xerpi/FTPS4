@@ -1,5 +1,5 @@
 /*
- * Coded by SiSTRo - Credits to flat_z
+ * Coded by SiSTRo and LM - Credits to flat_z
  */
 
 #include "ps4.h"
