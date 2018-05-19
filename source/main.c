@@ -218,6 +218,9 @@ int kpayload(struct thread *td){
 	// target_id patches 5.01
 -	*(uint16_t *)(kernel_base + 0x1CD068C) = 0x8101;
 -	*(uint16_t *)(kernel_base + 0x236B7FC) = 0x8101;
+	
+	//UART Enabler 5.05 Thanks to @DiwiDog // 5.05
+        *(char *)(kernel_base + 0x09ECEB0) = 0;
 
 	// enable mmap of all SELF 5.01
 	*(uint8_t*)(kernel_base + 0x117B0) = 0xB0;
