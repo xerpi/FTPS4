@@ -1,5 +1,5 @@
 /*
- * Coded by SiSTRo and LM - Credits to flat_z
+ * Coded by SiSTRo - Credits to flat_z
  */
 
 #include "ps4.h"
@@ -35,7 +35,6 @@ void build_iovec(struct iovec** iov, int* iovlen, const char* name, const void* 
     *iovlen = ++i;
 }
 
-
 int mount_large_fs(const char* device, const char* mountpoint, const char* fstype, const char* mode, unsigned int flags) {
     struct iovec* iov = NULL;
     int iovlen = 0;
@@ -68,11 +67,10 @@ int mount_large_fs(const char* device, const char* mountpoint, const char* fstyp
 }
 
 // Hello :) You come here often?
-int remount_system_partition() {
+int remount_root_partition() {
     int ret;
 	ret = mount_large_fs("/dev/da0x1.crypt", "/preinst2", "exfatfs", "511", MNT_UPDATE);
 	ret = mount_large_fs("/dev/da0x4.crypt", "/system", "exfatfs", "511", MNT_UPDATE);
-	ret = mount_large_fs("/dev/da0x5.crypt", "/system_ex", "exfatfs", "511", MNT_UPDATE);
 	ret = mount_large_fs("/dev/da0x9.crypt", "/system_data", "exfatfs", "511", MNT_UPDATE);
 	ret = mount_large_fs("/dev/md0", "/", "exfatfs", "511", MNT_UPDATE);
 	ret = mount_large_fs("/dev/md0.crypt", "/", "exfatfs", "511", MNT_UPDATE);
@@ -89,30 +87,8 @@ int remount_system_ex_partition() {
 
     ret = mount_large_fs("/dev/da0x5.crypt", "/system_ex", "exfatfs", "511", MNT_UPDATE);
     if (ret) {
-        printfsocket("  [E] remount_a_system_partition failed: %d", ret);
+        printfsocket("  [E] remount_system_ex_partition failed: %d", ret);
     }
-	int remount_system_partition() {
-		int ret;
-
-		ret = mount_large_fs("/dev/da0x4.crypt", "/system", "exfatfs", "511", MNT_UPDATE);
-		if (ret) {
-			printfsocket("  [E] remount_a_system_partition failed: %d", ret);
-		}
-		int remount_preinst2_partition() {
-			int ret;
-
-			ret = mount_large_fs("/dev/da0x1.crypt", "/preinst2", "exfatfs", "511", MNT_UPDATE);
-			if (ret) {
-				printfsocket("  [E] remount_a_system_partition failed: %d", ret);
-			}
-			int remount_root_partition() {
-				int ret;
-
-				ret = mount_large_fs("/dev/md0.crypt", "/", "exfatfs", "511", MNT_UPDATE);
-				if (ret) {
-					printfsocket("  [E] remount_Root_partition failed: %d", ret);
-				}
-
 
     return ret;
 }

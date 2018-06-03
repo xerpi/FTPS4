@@ -8,87 +8,75 @@
 #include "dump.h"
 #include "remount.h"
 
+
 int run;
+
+static void build_iovec(struct iovec** iov, int* iovlen, const char* name, const void* val, size_t len) {
+	int i;
+
+	if (*iovlen < 0)
+		return;
+
+	i = *iovlen;
+	*iov = realloc(*iov, sizeof **iov * (i + 2));
+	if (*iov == NULL) {
+		*iovlen = -1;
+		return;
+	}
+
+	(*iov)[i].iov_base = strdup(name);
+	(*iov)[i].iov_len = strlen(name) + 1;
+	++i;
+
+	(*iov)[i].iov_base = (void*)val;
+	if (len == (size_t)-1) {
+		if (val != NULL)
+			len = strlen(val) + 1;
+		else
+			len = 0;
+	}
+	(*iov)[i].iov_len = (int)len;
+
+	*iovlen = ++i;
+}
+
+static int mount_large_fs(const char* device, const char* mountpoint, const char* fstype, const char* mode, unsigned int flags) {
+	struct iovec* iov = NULL;
+	int iovlen = 0;
+
+	build_iovec(&iov, &iovlen, "fstype", fstype, -1);
+	build_iovec(&iov, &iovlen, "fspath", mountpoint, -1);
+	build_iovec(&iov, &iovlen, "from", device, -1);
+	build_iovec(&iov, &iovlen, "large", "yes", -1);
+	build_iovec(&iov, &iovlen, "timezone", "static", -1);
+	build_iovec(&iov, &iovlen, "async", "", -1);
+	build_iovec(&iov, &iovlen, "ignoreacl", "", -1);
+
+	if (mode) {
+		build_iovec(&iov, &iovlen, "dirmask", mode, -1);
+		build_iovec(&iov, &iovlen, "mask", mode, -1);
+	}
+
+	return nmount(iov, iovlen, flags);
+}
+
+/*void custom_MTRW(ftps4_client_info_t *client)
+{
+	if (mount_large_fs("/dev/da0x0.crypt", "/preinst",   "exfatfs", "511", MNT_UPDATE) < 0) goto fail;
+	if (mount_large_fs("/dev/da0x1.crypt", "/preinst2",  "exfatfs", "511", MNT_UPDATE) < 0) goto fail;
+	if (mount_large_fs("/dev/da0x4.crypt", "/system",    "exfatfs", "511", MNT_UPDATE) < 0) goto fail;
+	if (mount_large_fs("/dev/da0x5.crypt", "/system_ex", "exfatfs", "511", MNT_UPDATE) < 0) goto fail;
+
+	ftps4_ext_client_send_ctrl_msg(client, "200 Mount success." FTPS4_EOL);
+	return;
+
+fail:
+	ftps4_ext_client_send_ctrl_msg(client, "550 Could not mount!" FTPS4_EOL);
+}*/
 
 void custom_SHUTDOWN(ftps4_client_info_t *client) {
 	ftps4_ext_client_send_ctrl_msg(client, "200 Shutting down..." FTPS4_EOL);
 	run = 0;
-}
-
-char mount_from_path[PATH_MAX]; /* Yes, global. Lazy */
-
-void custom_MTFR(ftps4_client_info_t *client)
-{
-	char from_path[PATH_MAX];
-	/* Get the origin filename */
-	ftps4_gen_ftp_fullpath(client, from_path, sizeof(from_path));
-
-	/* The file to be renamed is the received path */
-	strncpy(mount_from_path, from_path, sizeof(mount_from_path));
-	ftps4_ext_client_send_ctrl_msg(client, "350 I need the destination name b0ss." FTPS4_EOL);
-}
-
-void custom_MTTO(ftps4_client_info_t *client)
-{
-	char path_to[PATH_MAX];
-	struct iovec iov[8];
-	char msg[512];
-	char errmsg[255];
-	int result;
-
-	/* Get the destination filename */
-	ftps4_gen_ftp_fullpath(client, path_to, sizeof(path_to));
-
-	/* Just in case */
-	unmount(path_to, 0);
-
-	iov[0].iov_base = "fstype";
-	iov[0].iov_len = sizeof("fstype");
-	iov[1].iov_base = "nullfs";
-	iov[1].iov_len = sizeof("nullfs");
-	iov[2].iov_base = "fspath";
-	iov[2].iov_len = sizeof("fspath");
-	iov[3].iov_base = path_to;
-	iov[3].iov_len = strlen(path_to) + 1;
-	iov[4].iov_base = "target";
-	iov[4].iov_len = sizeof("target");
-	iov[5].iov_base = mount_from_path;
-	iov[5].iov_len = strlen(mount_from_path) + 1;
-	iov[6].iov_base = "errmsg";
-	iov[6].iov_len = sizeof("errmsg");
-	iov[7].iov_base = errmsg;
-	iov[7].iov_len = sizeof(errmsg);
-	result = nmount(iov, 8, 0);
-	if (result < 0)
-	{
-		if (strlen(errmsg) > 0)
-			snprintf(msg, sizeof(msg), "550 Could not mount (%d): %s." FTPS4_EOL, errno, errmsg);
-		else
-			snprintf(msg, sizeof(msg), "550 Could not mount (%d)." FTPS4_EOL, errno);
-		ftps4_ext_client_send_ctrl_msg(client, msg);
-		return;
-	}
-
-	ftps4_ext_client_send_ctrl_msg(client, "200 Mount success." FTPS4_EOL);
-}
-
-void custom_UMT(ftps4_client_info_t *client)
-{
-	char msg[512];
-	int result;
-	char mount_path[PATH_MAX];
-
-	ftps4_gen_ftp_fullpath(client, mount_path, sizeof(mount_path));
-
-	result = unmount(mount_path, 0);
-	if (result < 0)
-	{
-		sprintf(msg, "550 Could not unmount (%d)." FTPS4_EOL, errno);
-		ftps4_ext_client_send_ctrl_msg(client, msg);
-		return;
-	}
-
-	ftps4_ext_client_send_ctrl_msg(client, "200 Unmount success." FTPS4_EOL);
 }
 
 unsigned int long long __readmsr(unsigned long __register) {
@@ -161,9 +149,9 @@ struct thread {
     	struct proc *td_proc;
 };
 
-#define	KERN_XFAST_SYSCALL	0x1C0		// 5.01
+#define	KERN_XFAST_SYSCALL	0x1C0		// 5.05
 #define KERN_PRISON_0		0x10986A0
-#define KERN_ROOTVNODE		0x22C19F0
+#define KERN_ROOTVNODE		0x22C1A70
 
 int kpayload(struct thread *td){
 
@@ -205,24 +193,17 @@ int kpayload(struct thread *td){
 	uint64_t cr0 = readCr0();
 	writeCr0(cr0 & ~X86_CR0_WP);
 
-	// debug settings patches 5.01
+	// debug settings patches 5.05
 	*(char *)(kernel_base + 0x1CD0686) |= 0x14;
 	*(char *)(kernel_base + 0x1CD06A9) |= 3;
 	*(char *)(kernel_base + 0x1CD06AA) |= 1;
 	*(char *)(kernel_base + 0x1CD06C8) |= 1;
 
-	// debug menu patches 5.01
-	*(uint32_t *)(kernel_base + 0x4F8C78) = 0;
-	*(uint32_t *)(kernel_base + 0x4F9D8C) = 0;
-	
-	// target_id patches 5.01
--	*(uint16_t *)(kernel_base + 0x1CD068C) = 0x8101;
--	*(uint16_t *)(kernel_base + 0x236B7FC) = 0x8101;
-	
-	//UART Enabler 5.05 Thanks to @DiwiDog // 5.05
-        *(char *)(kernel_base + 0x09ECEB0) = 0;
+	// debug menu error patches 5.05
+	*(uint32_t *)(kernel_base + 0x4F9048) = 0;
+	*(uint32_t *)(kernel_base + 0x4FA15C) = 0;
 
-	// enable mmap of all SELF 5.01
+	// enable mmap of all SELF 5.05
 	*(uint8_t*)(kernel_base + 0x117B0) = 0xB0;
 	*(uint8_t*)(kernel_base + 0x117B1) = 0x01;
 	*(uint8_t*)(kernel_base + 0x117B2) = 0xC3;
@@ -231,11 +212,11 @@ int kpayload(struct thread *td){
 	*(uint8_t*)(kernel_base + 0x117C1) = 0x01;
 	*(uint8_t*)(kernel_base + 0x117C2) = 0xC3;
 
-	*(uint8_t*)(kernel_base + 0x13EF2F) = 0x31;
-	*(uint8_t*)(kernel_base + 0x13EF30) = 0xC0;
-	*(uint8_t*)(kernel_base + 0x13EF31) = 0x90;
-	*(uint8_t*)(kernel_base + 0x13EF32) = 0x90;
-	*(uint8_t*)(kernel_base + 0x13EF33) = 0x90;
+	*(uint8_t*)(kernel_base + 0x13F03F) = 0x31;
+	*(uint8_t*)(kernel_base + 0x13F040) = 0xC0;
+	*(uint8_t*)(kernel_base + 0x13F041) = 0x90;
+	*(uint8_t*)(kernel_base + 0x13F042) = 0x90;
+	*(uint8_t*)(kernel_base + 0x13F043) = 0x90;
 
 	// Restore write protection
 	writeCr0(cr0);
@@ -271,6 +252,7 @@ int _main(struct thread *td)
 {
 	char ip_address[SCE_NET_CTL_IPV4_ADDR_STR_LEN];
 	char msg[64];
+    int ret;
 
 	run = 1;
 
@@ -296,24 +278,13 @@ int _main(struct thread *td)
 	{
 		notify("Unable to remount system_ex partition");
 	}
-	ret = remount_system_partition();
+    ret = remount_root_partition();
 	if (ret < 0)
 	{
-		notify("Unable to remount system partition");
+		notify("Unable to remount everything");
 	}
 
-	ret = remount_preinst2_partition();
-	if (ret < 0)
-	{
-		notify("Unable to remount preinst2 partition");
-	}
-	ret = remount_root_partition();
-	if (ret < 0)
-	{
-		notify("Unable to remount ROOT partition");
-	}
-
-	int ret = get_ip_address(ip_address);
+	ret = get_ip_address(ip_address);
 	if (ret < 0)
 	{
 		notify("Unable to get IP address");
@@ -321,10 +292,8 @@ int _main(struct thread *td)
 	}
 
 	ftps4_init(ip_address, FTP_PORT);
-	ftps4_ext_add_custom_command("SHUTDOWN", custom_SHUTDOWN);
-	ftps4_ext_add_custom_command("MTFR", custom_MTFR);
-	ftps4_ext_add_custom_command("MTTO", custom_MTTO);
-	ftps4_ext_add_custom_command("UMT", custom_UMT);
+	ftps4_ext_add_command("SHUTDOWN", custom_SHUTDOWN);
+	ftps4_ext_add_command("MTRW", custom_MTRW);
 
 	sprintf(msg, "PS4 listening on\nIP %s Port %i", ip_address, FTP_PORT);
 	notify(msg);
@@ -343,4 +312,3 @@ error:
 #endif
 	return 0;
 }
-
