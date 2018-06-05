@@ -293,7 +293,7 @@ int _main(struct thread *td)
 
 	ftps4_init(ip_address, FTP_PORT);
 	ftps4_ext_add_command("SHUTDOWN", custom_SHUTDOWN);
-	ftps4_ext_add_command("MTRW", custom_MTRW);
+	//ftps4_ext_add_command("MTRW", custom_MTRW);
 
 	sprintf(msg, "PS4 listening on\nIP %s Port %i", ip_address, FTP_PORT);
 	notify(msg);
