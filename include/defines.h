@@ -1,11 +1,11 @@
 #ifndef __DEFINES
 #define __DEFINES
 
-#define VERSION "1.3"
+#define VERSION "1.3.2"
 
 //#define DEBUG_SOCKET
 
-#define FTP_PORT 1337
+#define FTP_PORT 21
 
 #define LOG_IP   "192.168.1.3\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0"
 #define LOG_PORT 9023
